@@ -21,6 +21,14 @@ targets:
     platform: iOS
     sources: [App, Capabilities, Pairing, Delivery, ScreenTimeShared, WidgetShared]
     dependencies:
+      - target: BogoSection
+        embed: true
+      - target: BogoRelay
+        embed: true
+      - target: BogoCrypto
+        embed: true
+      - target: BogoModel
+        embed: true
       - target: BridgeWidgets
         embed: true
       - target: AlarmActivity
@@ -78,4 +86,56 @@ targets:
         CODE_SIGN_ENTITLEMENTS: BridgeWidgets/BridgeWidgets.entitlements
         PROVISIONING_PROFILE_SPECIFIER: $(AB_WIDGETS_PROFILE_NAME)
         APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+  BogoModel:
+    type: framework
+    platform: iOS
+    sources: [BogoKit/BogoModel]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.johansardar.applebridge.ios.bogo.model
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
+  BogoCrypto:
+    type: framework
+    platform: iOS
+    sources: [BogoKit/BogoCrypto]
+    dependencies:
+      - target: BogoModel
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.johansardar.applebridge.ios.bogo.crypto
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
+  BogoRelay:
+    type: framework
+    platform: iOS
+    sources: [BogoKit/BogoRelay]
+    dependencies:
+      - target: BogoModel
+        embed: false
+      - target: BogoCrypto
+        embed: false
+      - sdk: libsqlite3.tbd
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.johansardar.applebridge.ios.bogo.relay
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
+  BogoSection:
+    type: framework
+    platform: iOS
+    sources: [BogoKit/BogoSection]
+    dependencies:
+      - target: BogoModel
+        embed: false
+      - target: BogoCrypto
+        embed: false
+      - target: BogoRelay
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.johansardar.applebridge.ios.bogo.section
+        GENERATE_INFOPLIST_FILE: YES
         SKIP_INSTALL: YES
