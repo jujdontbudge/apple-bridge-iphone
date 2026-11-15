@@ -60,28 +60,22 @@ struct HistoryRow: View {
         .padding(.vertical, 4)
     }
 
-    private var status: String {
-        switch record.phase.decision {
-        case .approved?: return "Approved"
-        case .denied(let note?)?: return "Denied · “\(note)”"
-        case .denied?: return "Denied"
-        case nil: return "Refused while paused"
-        }
-    }
+    private var status: String { Formatting.history(record).text }
 
     private var symbol: String {
-        switch record.phase.decision {
-        case .approved?: return "checkmark.circle.fill"
-        case .denied?: return "xmark.circle.fill"
-        case nil: return "pause.circle.fill"
+        switch Formatting.history(record).mark {
+        case .approved: return "checkmark.circle.fill"
+        case .denied: return "xmark.circle.fill"
+        case .ended: return "minus.circle.fill"
+        case .paused: return "pause.circle.fill"
         }
     }
 
     private var tint: Color {
-        switch record.phase.decision {
-        case .approved?: return .green
-        case .denied?: return .red
-        case nil: return .secondary
+        switch Formatting.history(record).mark {
+        case .approved: return .green
+        case .denied: return .red
+        case .ended, .paused: return .secondary
         }
     }
 }

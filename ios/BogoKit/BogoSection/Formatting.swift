@@ -99,12 +99,43 @@ enum Formatting {
         case .sent(.denied): return "Denied"
         case .settled(.approved?): return "Approved"
         case .settled: return "Decided on another approver"
-        case .ended(.approved?, let why): return "Approved · " + ended(why).lowercasedFirst
+        case .ended(.approved?, let why): return "Ended · " + ended(why)
         case .ended(.denied?, _): return "Denied"
         case .ended(nil, let why): return ended(why)
+        case .finished(.approved?, let result) where !approvalStood(result):
+            return outcome(result)
         case .finished(let decision, let result):
             let prefix = decision == .approved ? "Approved · " : decision == nil ? "" : "Denied · "
             return prefix + (prefix.isEmpty ? outcome(result) : outcome(result).lowercasedFirst)
+        }
+    }
+
+    /// An approval stood if the Mac counted it and nothing ended the request
+    /// before it could run.
+    static func approvalStood(_ result: Outcome) -> Bool {
+        result == .executed || result == .unknown
+    }
+
+    enum Mark {
+        case approved, denied, ended, paused
+    }
+
+    /// What History shows for one record: an approval reads as approved only
+    /// while it still stands; one whose request ended reads as ended.
+    static func history(_ record: RequestRecord) -> (text: String, mark: Mark) {
+        switch record.phase {
+        case .pending: return ("Waiting", .ended)
+        case .sent(.approved): return ("Approved · sending to the Mac", .approved)
+        case .settled(.approved?): return ("Approved", .approved)
+        case .finished(.approved?, let result):
+            return approvalStood(result) ? ("Approved · " + outcome(result).lowercasedFirst, .approved) : (outcome(result), .ended)
+        case .ended(.approved?, let why): return ("Ended · " + ended(why), .ended)
+        case .sent(.denied(let note)), .settled(.denied(let note)?), .ended(.denied(let note)?, _), .finished(.denied(let note)?, _):
+            return (note.map { "Denied · “\($0)”" } ?? "Denied", .denied)
+        case .ended(nil, .agentPaused): return ("Refused while paused", .paused)
+        case .ended(nil, let why): return (ended(why), .ended)
+        case .settled(nil): return ("Decided on another approver", .ended)
+        case .finished(nil, let result): return (outcome(result), .ended)
         }
     }
 
