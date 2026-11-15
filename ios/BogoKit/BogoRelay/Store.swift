@@ -127,6 +127,10 @@ public final class Store {
            !((try? query("SELECT 1 FROM outbox WHERE bogo_id = ? AND kind = 'regResend' AND sent_ms IS NULL", [.data(bogoID)]) { _ in true }) ?? []).isEmpty {
             return
         }
+        if case .sync = message,
+           !((try? query("SELECT 1 FROM outbox WHERE bogo_id = ? AND kind = 'sync' AND body = ? AND sent_ms IS NULL", [.data(bogoID), .data(message.body)]) { _ in true }) ?? []).isEmpty {
+            return
+        }
         var msgID = Data(count: 16)
         _ = msgID.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
         try run("INSERT INTO outbox (msg_id, bogo_id, kind, req_id, body, created_ms, sent_ms) VALUES (?, ?, ?, ?, ?, ?, NULL)", [.data(msgID), .data(bogoID), .text(message.kind), message.reqID.map(Value.data) ?? .null,

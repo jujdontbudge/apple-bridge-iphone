@@ -248,6 +248,13 @@ public final class PhoneApprover {
                 Task { await flush() }
             }
         }
+        if let pending = try? store.outbox() {
+            let resent = Set(pending.filter { $0.sentMs == nil && $0.envelope != nil }.compactMap(\.message.reqID))
+            for mac in macs where mac.state == .active {
+                let open = records.filter { $0.bogoID == mac.bogoID && resent.contains($0.reqID) && Self.awaitingOutcome($0.phase) }.map(\.reqID)
+                if !open.isEmpty { try? store.enqueue(.sync(reqIDs: open), to: mac.bogoID, nowMs: clock()) }
+            }
+        }
         guard let rows = try? store.outbox() else { return }
         var failed = false
         for row in rows where row.sentMs == nil {
