@@ -14,7 +14,7 @@ PROOFS = [
     ('alarms', ['ios/Capabilities/Alarms/AlarmCommands.swift', 'lab/iphonealarms/main.swift'], 'passed'),
     ('siri', ['ios/Capabilities/Siri/CommandIntent.swift', 'lab/iphoneintents/main.swift'], 'intent_dispatch_check: pass assertions=4'),
     ('location', ['ios/Capabilities/Location/LocationStore.swift', 'ios/App/QualificationWait.swift', 'lab/fixtures/location/LocationProof.swift'], 'location_adapter_proof=pass'),
-    ('shell', ['ios/Delivery/PhoneJob.swift', 'ios/Capabilities/Approvals/ApprovalInbox.swift', 'ios/Pairing/PairingState.swift', 'ios/App/ShellModel.swift', 'lab/ios/ShellProof.swift'], None),
+    ('shell', ['ios/Delivery/PhoneJob.swift', 'ios/Pairing/PairingState.swift', 'ios/App/ShellModel.swift', 'lab/ios/ShellProof.swift'], None),
     ('screen-time', ['ios/ScreenTimeShared/ShieldPolicy.swift', 'lab/ios/main.swift'], 'shield_policy_pass'),
 ]
 
