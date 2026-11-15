@@ -16,13 +16,17 @@ public final class PhoneApprover {
     public private(set) var records: [RequestRecord] = []
     public private(set) var pauses: [Data: UInt64] = [:]
     public private(set) var storeFailure = false
-    public var pushToken: Data?
+    public var pushToken: Data? {
+        didSet { if pushToken != oldValue { sendPushToken() } }
+    }
+    public var pushEnvironment = "production"
 
     @ObservationIgnored private let store: Store?
     @ObservationIgnored public let link: MacLink
     @ObservationIgnored private let clock: () -> UInt64
     @ObservationIgnored private var flushing = false
     @ObservationIgnored private var flushAgain = false
+    @ObservationIgnored private var retry: Task<Void, Never>?
 
     public init(directory: URL, link: MacLink, clock: @escaping () -> UInt64 = { UInt64(Date().timeIntervalSince1970 * 1000) }) {
         self.store = try? Store(directory: directory)
@@ -30,7 +34,8 @@ public final class PhoneApprover {
         self.clock = clock
         storeFailure = store == nil
         reload()
-        link.receive = { [weak self] bogoID, message in self?.receive(bogoID, message) }
+        link.receive = { [weak self] bogoID, msgID, message in self?.receive(bogoID, msgID: msgID, message) ?? false }
+        link.applied = { [weak self] bogoID, msgID in self?.store?.applied(bogoID: bogoID, msgID: msgID) ?? false }
         link.start(macs: macs)
     }
 
@@ -55,54 +60,84 @@ public final class PhoneApprover {
         return pauses[record.bogoID + agent] == record.pauseEpoch
     }
 
-    public func receive(_ bogoID: Data, _ message: MacMessage) {
-        guard let store, var mac = mac(bogoID), mac.state != .waiting else { return }
+    /// Applies one message from a Mac and records its ID in the same
+    /// transaction. Returns true once that is durable (or the message is one to
+    /// drop), so the link may acknowledge it; false leaves it in the mailbox.
+    @discardableResult
+    public func receive(_ bogoID: Data, msgID: Data?, _ message: MacMessage) -> Bool {
+        guard let store else { return false }
+        guard var mac = mac(bogoID) else { return true }
+        if let msgID, store.applied(bogoID: bogoID, msgID: msgID) { return true }
         let now = clock()
+        var relink = false
         do {
-            switch message {
-            case .request(let reqID, let bootSeq, let bytes, let pauseEpoch, let armDelayMs):
-                guard mac.state != .removed else { return }
-                let existing = records.first { $0.bogoID == bogoID && $0.reqID == reqID }
+            if mac.state == .waiting {
+                // Until the Mac confirms the registration, only `registered` counts;
+                // everything else waits in the mailbox.
+                guard case .registered(let txID, let approverID) = message else { return false }
                 try store.transaction {
-                    if existing == nil || existing?.receivedMs == 0 {
-                        var record = RequestRecord(bogoID: bogoID, reqID: reqID, bytes: bytes, bootSeq: bootSeq, pauseEpoch: pauseEpoch, armDelayMs: armDelayMs,
-                                                   receivedMs: now, phase: existing?.phase ?? .pending, changedMs: now)
-                        if record.phase.isPending, bootSeq < mac.bootSeq { record.phase = .ended(nil, .otherBoot) }
-                        if record.phase.isPending, isPaused(record) { record.phase = .ended(nil, .agentPaused) }
-                        try store.save(record)
+                    if mac.route?.txID == txID, mac.approverID == approverID {
+                        mac.state = .active
+                        try store.save(mac)
+                        relink = true
                     }
-                    try store.enqueue(.seen(reqID: reqID), to: bogoID, nowMs: now)
+                    if let msgID { try store.markApplied(bogoID: bogoID, msgID: msgID, nowMs: now) }
                 }
-            case .settled(let reqID):
-                try apply(.settled, to: reqID, at: bogoID, now: now)
-            case .ended(let reqID, let why):
-                try apply(.ended(why), to: reqID, at: bogoID, now: now)
-            case .outcome(let reqID, let outcome?):
-                try apply(.outcome(outcome), to: reqID, at: bogoID, now: now)
-            case .outcome:
-                break
-            case .boot(let bootSeq, _):
-                guard bootSeq > mac.bootSeq else { return }
-                try store.transaction {
-                    for var record in records where record.bogoID == bogoID && record.bootSeq < bootSeq && record.phase.isPending && record.receivedMs > 0 {
-                        record.phase = .ended(nil, .otherBoot)
-                        record.changedMs = now
-                        try store.save(record)
-                    }
-                    mac.bootSeq = bootSeq
-                    try store.save(mac)
-                    let open = records.filter { $0.bogoID == bogoID && $0.phase.decision != nil && !Self.final($0.phase) }.map(\.reqID)
-                    if !open.isEmpty { try store.enqueue(.sync(reqIDs: open), to: bogoID, nowMs: now) }
-                }
-            case .revokedAck:
-                guard mac.state == .removed else { return }
+            } else if case .revokedAck = message, mac.state == .removed {
                 try store.deleteMac(bogoID)
+                relink = true
+            } else {
+                try store.transaction {
+                    try apply(message, to: &mac, now: now)
+                    if let msgID { try store.markApplied(bogoID: bogoID, msgID: msgID, nowMs: now) }
+                }
             }
         } catch {
             storeFailure = true
+            reload()
+            return false
         }
         reload()
+        if relink { link.start(macs: macs) }
         Task { await flush() }
+        return true
+    }
+
+    private func apply(_ message: MacMessage, to mac: inout MacRecord, now: UInt64) throws {
+        guard let store else { return }
+        let bogoID = mac.bogoID
+        switch message {
+        case .request(let reqID, let bootSeq, let bytes, let pauseEpoch, let armDelayMs):
+            guard mac.state != .removed else { return }
+            let existing = records.first { $0.bogoID == bogoID && $0.reqID == reqID }
+            if existing == nil || existing?.receivedMs == 0 {
+                var record = RequestRecord(bogoID: bogoID, reqID: reqID, bytes: bytes, bootSeq: bootSeq, pauseEpoch: pauseEpoch, armDelayMs: armDelayMs,
+                                           receivedMs: now, phase: existing?.phase ?? .pending, changedMs: now)
+                if record.phase.isPending, bootSeq < mac.bootSeq { record.phase = .ended(nil, .otherBoot) }
+                if record.phase.isPending, isPaused(record) { record.phase = .ended(nil, .agentPaused) }
+                try store.save(record)
+            }
+            try store.enqueue(.seen(reqID: reqID), to: bogoID, nowMs: now)
+        case .settled(let reqID):
+            try apply(.settled, to: reqID, at: bogoID, now: now)
+        case .ended(let reqID, let why):
+            try apply(.ended(why), to: reqID, at: bogoID, now: now)
+        case .outcome(let reqID, let outcome?):
+            try apply(.outcome(outcome), to: reqID, at: bogoID, now: now)
+        case .outcome, .registered, .revokedAck:
+            break
+        case .boot(let bootSeq, _):
+            guard bootSeq > mac.bootSeq else { return }
+            for var record in records where record.bogoID == bogoID && record.bootSeq < bootSeq && record.phase.isPending && record.receivedMs > 0 {
+                record.phase = .ended(nil, .otherBoot)
+                record.changedMs = now
+                try store.save(record)
+            }
+            mac.bootSeq = bootSeq
+            try store.save(mac)
+            let open = records.filter { $0.bogoID == bogoID && $0.phase.decision != nil && !Self.final($0.phase) }.map(\.reqID)
+            if !open.isEmpty { try store.enqueue(.sync(reqIDs: open), to: bogoID, nowMs: now) }
+        }
     }
 
     public func approve(_ record: RequestRecord) async -> DecisionResult {
@@ -195,6 +230,9 @@ public final class PhoneApprover {
                 let open = waiting.filter { $0.bogoID == mac.bogoID }.map(\.reqID)
                 if !open.isEmpty { try? store.enqueue(.sync(reqIDs: open), to: mac.bogoID, nowMs: clock()) }
             }
+            for mac in macs where mac.state == .waiting {
+                if let txID = mac.route?.txID { try? store.enqueue(.regResend(txID: txID), to: mac.bogoID, nowMs: clock()) }
+            }
         }
         await link.fetch()
         await flush()
@@ -216,13 +254,28 @@ public final class PhoneApprover {
             }
         }
         guard let rows = try? store.outbox() else { return }
+        var failed = false
         for row in rows where row.sentMs == nil {
             guard let mac = mac(row.bogoID) else { continue }
             do {
-                try await link.send(row.message, msgID: row.msgID, to: mac)
+                let sealed: Data
+                if let envelope = row.envelope {
+                    sealed = envelope
+                } else {
+                    sealed = try link.seal(row.message, msgID: row.msgID, for: mac)
+                    try store.saveEnvelope(row.msgID, sealed)
+                }
+                try await link.send(row.message, sealed: sealed, msgID: row.msgID, to: mac)
                 try store.markSent(row.msgID, nowMs: clock())
             } catch {
-                continue
+                failed = true
+            }
+        }
+        if failed && retry == nil {
+            retry = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                self?.retry = nil
+                await self?.flush()
             }
         }
     }
@@ -235,26 +288,72 @@ public final class PhoneApprover {
         guard let store else { throw StoreError.sqlite("unavailable") }
         let account = Hex.string(confirmation.bogoID) + "." + UUID().uuidString
         let key = try await ApprovalKey.create(account: account, reason: "Add \(confirmation.macName) to BOGO", proving: Registration.proofMessage(confirmation))
-        let attestation = try await AppAttest.attest(clientDataHash: Data(SHA256.hash(data: confirmation.transcriptHash + confirmation.challenge + key.publicKey)))
-        if let previous = mac(confirmation.bogoID) { ApprovalKey.delete(account: previous.keyAccount) }
-        var mac = MacRecord(bogoID: confirmation.bogoID, name: confirmation.macName, keyAccount: account, approvalPublicKey: key.publicKey, approverID: nil,
-                            biometryState: ApprovalKey.biometryState(), state: .waiting, addedMs: clock(), bootSeq: 0)
-        try store.save(mac)
-        reload()
+        let saved: (route: MacRoute, approverID: Data)?
+        let attestation: Attestation?
         do {
-            let registered = try await channel.submit(RegistrationSubmission(approvalPublicKey: key.publicKey, proof: key.proof, attestation: attestation, pushToken: pushToken))
-            mac.approverID = registered.approverID
-            mac.state = .active
-            try store.save(mac)
+            attestation = try await AppAttest.attest(clientDataHash: channel.clientDataHash(approvalKey: key.publicKey))
+            saved = try channel.saveRoute()
         } catch {
             ApprovalKey.delete(account: account)
+            channel.abort()
+            throw error
+        }
+        if let previous = mac(confirmation.bogoID) {
+            ApprovalKey.delete(account: previous.keyAccount)
+            if let old = previous.route, old.channelAccount != saved?.route.channelAccount { ChannelKeys.delete(account: old.channelAccount) }
+        }
+        let mac = MacRecord(bogoID: confirmation.bogoID, name: confirmation.macName, keyAccount: account, approvalPublicKey: key.publicKey,
+                            approverID: saved?.approverID, biometryState: ApprovalKey.biometryState(), state: .waiting, addedMs: clock(), bootSeq: 0,
+                            route: saved?.route, pushToken: pushToken)
+        try store.save(mac)
+        reload()
+        // The Mac's mailbox is allowed and watched before the submission goes
+        // out, so a `registered` that misses the lobby still arrives.
+        link.start(macs: macs)
+        do {
+            let registered = try await channel.submit(RegistrationSubmission(approvalPublicKey: key.publicKey, proof: key.proof, attestation: attestation,
+                                                                             pushToken: pushToken, pushEnvironment: pushEnvironment))
+            guard saved == nil || registered.approverID == saved?.approverID else { throw RegistrationError.tampered }
+            if var current = self.mac(confirmation.bogoID), current.state == .waiting {
+                current.approverID = registered.approverID
+                current.state = .active
+                try store.save(current)
+            }
+        } catch RegistrationError.unanswered where saved != nil {
+            // The Mac may have committed: keep the entry waiting and ask again.
+            try? store.enqueue(.regResend(txID: saved!.route.txID), to: mac.bogoID, nowMs: clock())
+            reload()
+            Task { await flush() }
+            throw RegistrationError.unanswered
+        } catch {
+            ApprovalKey.delete(account: account)
+            if let saved { ChannelKeys.delete(account: saved.route.channelAccount) }
             try? store.deleteMac(mac.bogoID)
             reload()
+            link.start(macs: macs)
             throw error
         }
         reload()
         link.start(macs: macs)
-        return mac
+        return self.mac(confirmation.bogoID) ?? mac
+    }
+
+    private func sendPushToken() {
+        guard let store, let token = pushToken, token.count == 32 else { return }
+        let now = clock()
+        do {
+            try store.transaction {
+                for var mac in macs where mac.state == .active && mac.route != nil && mac.pushToken != token {
+                    mac.pushToken = token
+                    try store.save(mac)
+                    try store.enqueue(.pushToken(seq: now, token: token, env: pushEnvironment), to: mac.bogoID, nowMs: now)
+                }
+            }
+        } catch {
+            storeFailure = true
+        }
+        reload()
+        Task { await flush() }
     }
 
     private func decide(_ record: RequestRecord, _ decision: Decision, message: PhoneMessage) -> DecisionResult {

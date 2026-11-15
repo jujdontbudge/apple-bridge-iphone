@@ -6,13 +6,15 @@ import Foundation
 @MainActor
 public final class StandInMacLink: MacLink {
     public static let macName = "Stand-in Mac"
+    public static let offerID = "stand-in"
     public static let armDelayMs: UInt64 = 2000
     public static let script: [(vector: String, afterMs: UInt64)] = [
         ("payment-approved", 0), ("lie-in-reason", 300), ("filesystem-write", 300), ("other-session", 300), ("researcher", 300),
         ("keys-unordered", 300), ("amount-4701", 300),
     ]
 
-    public var receive: ((Data, MacMessage) -> Void)?
+    public var receive: ((Data, Data?, MacMessage) -> Bool)?
+    public var applied: ((Data, Data) -> Bool)?
     public let directory: URL
     public let bogoID: Data
 
@@ -91,17 +93,21 @@ public final class StandInMacLink: MacLink {
         }
     }
 
-    public func send(_ message: PhoneMessage, msgID: Data, to mac: MacRecord) async throws {
+    public func seal(_ message: PhoneMessage, msgID: Data, for mac: MacRecord) throws -> Data {
+        message.body
+    }
+
+    public func send(_ message: PhoneMessage, sealed: Data, msgID: Data, to mac: MacRecord) async throws {
         var line: [String: Any] = ["msgId": Hex.string(msgID), "body": String(decoding: message.body, as: UTF8.self)]
         switch message {
         case .approval(let reqID, let alg, let sig):
             line["verified"] = verify(alg: alg, signature: sig, reqID: reqID, key: mac.approvalPublicKey)
         case .pause(let agentID, let epoch):
             guard epochs[agentID, default: 1] == epoch else { break }
-            for (reqID, bytes) in sent where RequestBytes.decode(bytes)?.agentID == agentID { receive?(bogoID, .ended(reqID: reqID, why: .agentPaused)) }
+            for (reqID, bytes) in sent where RequestBytes.decode(bytes)?.agentID == agentID { _ = receive?(bogoID, nil, .ended(reqID: reqID, why: .agentPaused)) }
         case .removed:
             self.mac = nil
-            receive?(mac.bogoID, .revokedAck)
+            _ = receive?(mac.bogoID, nil, .revokedAck)
         default:
             break
         }
@@ -110,7 +116,7 @@ public final class StandInMacLink: MacLink {
 
     public func offers(excluding macs: [MacRecord]) async -> [RegistrationOffer] {
         guard !macs.contains(where: { $0.bogoID == bogoID && $0.state == .active }) else { return [] }
-        return [RegistrationOffer(id: "stand-in", label: Self.macName, opened: Date().addingTimeInterval(-12))]
+        return [RegistrationOffer(id: Self.offerID, label: Self.macName, opened: Date().addingTimeInterval(-12))]
     }
 
     public func register(_ offer: RegistrationOffer) async throws -> RegistrationChannel {
@@ -125,7 +131,7 @@ public final class StandInMacLink: MacLink {
         sent = [:]
         latest = [:]
         save()
-        receive?(bogoID, .boot(bootSeq: bootSeq, bootID: bootID))
+        _ = receive?(bogoID, nil, .boot(bootSeq: bootSeq, bootID: bootID))
         Task {
             for step in Self.script {
                 try? await Task.sleep(for: .milliseconds(step.afterMs))
@@ -150,13 +156,13 @@ public final class StandInMacLink: MacLink {
             deliver(bytes, reqID: RequestBytes.decode(bytes)?.nonce)
         }
         if let name = command["ended"] as? String, let reqID = nonce(name) {
-            receive?(bogoID, .ended(reqID: reqID, why: EndReason(rawValue: command["why"] as? String ?? "") ?? .callEnded))
+            _ = receive?(bogoID, nil, .ended(reqID: reqID, why: EndReason(rawValue: command["why"] as? String ?? "") ?? .callEnded))
         }
         if let name = command["settled"] as? String, let reqID = nonce(name) {
-            receive?(bogoID, .settled(reqID: reqID))
+            _ = receive?(bogoID, nil, .settled(reqID: reqID))
         }
         if let name = command["outcome"] as? String, let reqID = nonce(name) {
-            receive?(bogoID, .outcome(reqID: reqID, outcome: Outcome(rawValue: command["is"] as? String ?? "") ?? .unknown))
+            _ = receive?(bogoID, nil, .outcome(reqID: reqID, outcome: Outcome(rawValue: command["is"] as? String ?? "") ?? .unknown))
         }
         if let agent = command["unpause"] as? String, let agentID = vectors.values.compactMap({ RequestBytes.decode($0) }).first(where: { $0.agentName == agent })?.agentID {
             epochs[agentID, default: 1] += 1
@@ -167,7 +173,7 @@ public final class StandInMacLink: MacLink {
             bootID = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
             seq = 0
             save()
-            receive?(bogoID, .boot(bootSeq: bootSeq, bootID: bootID))
+            _ = receive?(bogoID, nil, .boot(bootSeq: bootSeq, bootID: bootID))
         }
     }
 
@@ -182,7 +188,7 @@ public final class StandInMacLink: MacLink {
         sent[id] = bytes
         save()
         let agent = RequestBytes.decode(bytes)?.agentID ?? Data()
-        receive?(bogoID, .request(reqID: id, bootSeq: bootSeq, bytes: bytes, pauseEpoch: epochs[agent, default: 1], armDelayMs: Self.armDelayMs))
+        _ = receive?(bogoID, nil, .request(reqID: id, bootSeq: bootSeq, bytes: bytes, pauseEpoch: epochs[agent, default: 1], armDelayMs: Self.armDelayMs))
         return id
     }
 
@@ -264,6 +270,14 @@ final class StandInRegistration: RegistrationChannel {
         try await Task.sleep(for: .milliseconds(1800))
         guard !aborted else { throw CancellationError() }
         return MacConfirmation(bogoID: link.bogoID, macName: StandInMacLink.macName, challenge: challenge, transcriptHash: transcriptHash)
+    }
+
+    func clientDataHash(approvalKey: Data) -> Data {
+        Data(SHA256.hash(data: transcriptHash + challenge + approvalKey))
+    }
+
+    func saveRoute() throws -> (route: MacRoute, approverID: Data)? {
+        nil
     }
 
     func submit(_ submission: RegistrationSubmission) async throws -> Registered {

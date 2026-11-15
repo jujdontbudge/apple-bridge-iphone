@@ -13,6 +13,8 @@ public struct OutboxRow: Equatable, Sendable {
     public let message: PhoneMessage
     public let createdMs: UInt64
     public let sentMs: UInt64?
+    /// The exact bytes sent the first time; every resend reuses them.
+    public let envelope: Data?
 }
 
 @MainActor
@@ -41,7 +43,17 @@ public final class Store {
           created_ms INTEGER NOT NULL, sent_ms INTEGER);
         CREATE TABLE IF NOT EXISTS pauses (bogo_id BLOB NOT NULL, agent_id BLOB NOT NULL, epoch INTEGER NOT NULL, paused_ms INTEGER NOT NULL,
           PRIMARY KEY (bogo_id, agent_id));
+        CREATE TABLE IF NOT EXISTS inbound (bogo_id BLOB NOT NULL, msg_id BLOB NOT NULL, applied_ms INTEGER NOT NULL, PRIMARY KEY (bogo_id, msg_id));
         """)
+        try addColumns("macs", ["mac_e2e BLOB", "mac_mailbox TEXT", "tx_id BLOB", "channel_account TEXT", "push_token BLOB"])
+        try addColumns("outbox", ["envelope BLOB"])
+    }
+
+    private func addColumns(_ table: String, _ columns: [String]) throws {
+        let existing = Set(try query("PRAGMA table_info(\(table))") { $0.text(1) })
+        for column in columns where !existing.contains(String(column.split(separator: " ")[0])) {
+            try execute("ALTER TABLE \(table) ADD COLUMN \(column)")
+        }
     }
 
     public func transaction(_ body: () throws -> Void) throws {
@@ -56,18 +68,42 @@ public final class Store {
     }
 
     public func macs() throws -> [MacRecord] {
-        try query("SELECT bogo_id, name, key_account, public_key, approver_id, biometry, state, added_ms, boot_seq FROM macs ORDER BY added_ms") { row in
-            MacRecord(bogoID: row.data(0), name: row.text(1), keyAccount: row.text(2), approvalPublicKey: row.data(3), approverID: row.optionalData(4),
-                      biometryState: row.optionalData(5), state: MacState(rawValue: row.text(6)) ?? .removed, addedMs: row.u64(7), bootSeq: row.u64(8))
+        try query("""
+        SELECT bogo_id, name, key_account, public_key, approver_id, biometry, state, added_ms, boot_seq, mac_e2e, mac_mailbox, tx_id, channel_account, push_token
+        FROM macs ORDER BY added_ms
+        """) { row in
+            var route: MacRoute?
+            if let macE2E = row.optionalData(9), let mailbox = row.optionalText(10), let txID = row.optionalData(11), let account = row.optionalText(12) {
+                route = MacRoute(macE2E: macE2E, macMailbox: mailbox, txID: txID, channelAccount: account)
+            }
+            return MacRecord(bogoID: row.data(0), name: row.text(1), keyAccount: row.text(2), approvalPublicKey: row.data(3), approverID: row.optionalData(4),
+                             biometryState: row.optionalData(5), state: MacState(rawValue: row.text(6)) ?? .removed, addedMs: row.u64(7), bootSeq: row.u64(8),
+                             route: route, pushToken: row.optionalData(13))
         }
     }
 
     public func save(_ mac: MacRecord) throws {
-        try run("INSERT OR REPLACE INTO macs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [.data(mac.bogoID), .text(mac.name), .text(mac.keyAccount), .data(mac.approvalPublicKey),
-            mac.approverID.map(Value.data) ?? .null, mac.biometryState.map(Value.data) ?? .null, .text(mac.state.rawValue), .int(mac.addedMs), .int(mac.bootSeq)])
+        try run("""
+        INSERT OR REPLACE INTO macs (bogo_id, name, key_account, public_key, approver_id, biometry, state, added_ms, boot_seq,
+          mac_e2e, mac_mailbox, tx_id, channel_account, push_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [.data(mac.bogoID), .text(mac.name), .text(mac.keyAccount), .data(mac.approvalPublicKey),
+            mac.approverID.map(Value.data) ?? .null, mac.biometryState.map(Value.data) ?? .null, .text(mac.state.rawValue), .int(mac.addedMs), .int(mac.bootSeq),
+            mac.route.map { .data($0.macE2E) } ?? .null, mac.route.map { .text($0.macMailbox) } ?? .null, mac.route.map { .data($0.txID) } ?? .null,
+            mac.route.map { .text($0.channelAccount) } ?? .null, mac.pushToken.map(Value.data) ?? .null])
+    }
+
+    /// True if this message from this Mac was already applied.
+    public func applied(bogoID: Data, msgID: Data) -> Bool {
+        ((try? query("SELECT 1 FROM inbound WHERE bogo_id = ? AND msg_id = ?", [.data(bogoID), .data(msgID)]) { _ in true }) ?? []).isEmpty == false
+    }
+
+    /// Records a message's ID together with its effect, in the same transaction.
+    public func markApplied(bogoID: Data, msgID: Data, nowMs: UInt64) throws {
+        try run("INSERT OR IGNORE INTO inbound VALUES (?, ?, ?)", [.data(bogoID), .data(msgID), .int(nowMs)])
     }
 
     public func deleteMac(_ bogoID: Data) throws {
+        try run("DELETE FROM inbound WHERE bogo_id = ?", [.data(bogoID)])
         try run("DELETE FROM macs WHERE bogo_id = ?", [.data(bogoID)])
         try run("DELETE FROM pauses WHERE bogo_id = ?", [.data(bogoID)])
         try run("DELETE FROM records WHERE bogo_id = ?", [.data(bogoID)])
@@ -90,16 +126,25 @@ public final class Store {
     }
 
     public func enqueue(_ message: PhoneMessage, to bogoID: Data, nowMs: UInt64) throws {
+        if case .regResend = message,
+           !((try? query("SELECT 1 FROM outbox WHERE bogo_id = ? AND kind = 'regResend' AND sent_ms IS NULL", [.data(bogoID)]) { _ in true }) ?? []).isEmpty {
+            return
+        }
         var msgID = Data(count: 16)
         _ = msgID.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
-        try run("INSERT INTO outbox VALUES (?, ?, ?, ?, ?, ?, NULL)", [.data(msgID), .data(bogoID), .text(message.kind), message.reqID.map(Value.data) ?? .null,
+        try run("INSERT INTO outbox (msg_id, bogo_id, kind, req_id, body, created_ms, sent_ms) VALUES (?, ?, ?, ?, ?, ?, NULL)", [.data(msgID), .data(bogoID), .text(message.kind), message.reqID.map(Value.data) ?? .null,
             .data(message.body), .int(nowMs)])
     }
 
     public func outbox() throws -> [OutboxRow] {
-        try query("SELECT msg_id, bogo_id, body, created_ms, sent_ms FROM outbox ORDER BY created_ms, rowid") { row in
-            OutboxRow(msgID: row.data(0), bogoID: row.data(1), message: PhoneMessage(body: row.data(2)) ?? .removed, createdMs: row.u64(3), sentMs: row.optionalU64(4))
+        try query("SELECT msg_id, bogo_id, body, created_ms, sent_ms, envelope FROM outbox ORDER BY created_ms, rowid") { row in
+            OutboxRow(msgID: row.data(0), bogoID: row.data(1), message: PhoneMessage(body: row.data(2)) ?? .removed, createdMs: row.u64(3), sentMs: row.optionalU64(4),
+                      envelope: row.optionalData(5))
         }
+    }
+
+    public func saveEnvelope(_ msgID: Data, _ envelope: Data) throws {
+        try run("UPDATE outbox SET envelope = ? WHERE msg_id = ? AND envelope IS NULL", [.data(envelope), .data(msgID)])
     }
 
     public func markSent(_ msgID: Data, nowMs: UInt64) throws {

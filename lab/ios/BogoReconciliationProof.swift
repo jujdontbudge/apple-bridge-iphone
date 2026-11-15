@@ -3,11 +3,13 @@ import Foundation
 
 @MainActor
 final class ReconciliationLink: MacLink {
-    var receive: ((Data, MacMessage) -> Void)?
+    var receive: ((Data, Data?, MacMessage) -> Bool)?
+    var applied: ((Data, Data) -> Bool)?
     var messages: [PhoneMessage] = []
     func start(macs: [MacRecord]) {}
     func fetch() async {}
-    func send(_ message: PhoneMessage, msgID: Data, to mac: MacRecord) async throws {
+    func seal(_ message: PhoneMessage, msgID: Data, for mac: MacRecord) throws -> Data { message.body }
+    func send(_ message: PhoneMessage, sealed: Data, msgID: Data, to mac: MacRecord) async throws {
         messages.append(message)
     }
     func offers(excluding macs: [MacRecord]) async -> [RegistrationOffer] { [] }
@@ -29,7 +31,7 @@ enum BogoReconciliationProof {
                                  approverID: nil, biometryState: nil, state: .active, addedMs: 1, bootSeq: 1))
         let link = ReconciliationLink()
         let approver = PhoneApprover(directory: directory, link: link, clock: { 1000 })
-        approver.receive(bogoID, .request(reqID: reqID, bootSeq: 1, bytes: Data(), pauseEpoch: 1, armDelayMs: 0))
+        approver.receive(bogoID, msgID: nil, .request(reqID: reqID, bootSeq: 1, bytes: Data(), pauseEpoch: 1, armDelayMs: 0))
         guard let record = approver.records.first,
               approver.deny(record, note: "wrong amount") == .decided else {
             fatalError("Fixture must persist a denial")
