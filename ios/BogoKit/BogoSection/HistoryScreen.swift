@@ -65,7 +65,7 @@ struct HistoryRow: View {
         case .approved?: return "Approved"
         case .denied(let note?)?: return "Denied · “\(note)”"
         case .denied?: return "Denied"
-        case nil: return "Refused · agent paused"
+        case nil: return "Refused while paused"
         }
     }
 

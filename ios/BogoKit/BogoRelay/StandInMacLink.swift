@@ -24,7 +24,17 @@ public final class StandInMacLink: MacLink {
     private var seq: UInt64 = 0
     private var epochs: [Data: UInt64] = [:]
     private var sent: [Data: Data] = [:]
+    private var latest: [String: Data] = [:]
     private var poller: Task<Void, Never>?
+
+    private struct Saved: Codable {
+        var bootSeq: UInt64
+        var bootID: String
+        var seq: UInt64
+        var epochs: [String: UInt64]
+        var sent: [String: String]
+        var latest: [String: String]
+    }
 
     public init(directory: URL) {
         self.directory = directory
@@ -33,10 +43,34 @@ public final class StandInMacLink: MacLink {
         rejects = Self.load(bundle.url(forResource: "decode_reject", withExtension: "json"), list: "reject", bytes: "hex")
         bogoID = vectors["payment-approved"].flatMap { RequestBytes.decode($0)?.bogoID } ?? Data(repeating: 0, count: 32)
         try? FileManager.default.createDirectory(at: directory.appendingPathComponent("inbox"), withIntermediateDirectories: true)
+        if let data = try? Data(contentsOf: directory.appendingPathComponent("state.json")), let saved = try? JSONDecoder().decode(Saved.self, from: data) {
+            bootSeq = saved.bootSeq
+            bootID = Hex.data(saved.bootID) ?? Data()
+            seq = saved.seq
+            epochs = Self.unhexed(saved.epochs)
+            sent = Self.unhexed(saved.sent).compactMapValues { Hex.data($0) }
+            latest = saved.latest.compactMapValues { Hex.data($0) }
+        }
+        if bootID.count != 32 { bootID = Data((0..<32).map { _ in UInt8.random(in: 0...255) }) }
+    }
+
+    private func save() {
+        let saved = Saved(bootSeq: bootSeq, bootID: Hex.string(bootID), seq: seq,
+                          epochs: Dictionary(uniqueKeysWithValues: epochs.map { (Hex.string($0.key), $0.value) }),
+                          sent: Dictionary(uniqueKeysWithValues: sent.map { (Hex.string($0.key), Hex.string($0.value)) }),
+                          latest: latest.mapValues { Hex.string($0) })
+        try? JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("state.json"), options: .atomic)
+    }
+
+    private static func unhexed<Value>(_ map: [String: Value]) -> [Data: Value] {
+        var result: [Data: Value] = [:]
+        for (key, value) in map { if let data = Hex.data(key) { result[data] = value } }
+        return result
     }
 
     public func start(macs: [MacRecord]) {
         mac = macs.first { $0.bogoID == bogoID && $0.state != .removed && $0.state != .waiting }
+        if let mac, bootSeq < mac.bootSeq { bootSeq = mac.bootSeq }
         guard poller == nil else { return }
         poller = Task { [weak self] in
             while !Task.isCancelled {
@@ -89,6 +123,8 @@ public final class StandInMacLink: MacLink {
         bootID = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
         seq = 0
         sent = [:]
+        latest = [:]
+        save()
         receive?(bogoID, .boot(bootSeq: bootSeq, bootID: bootID))
         Task {
             for step in Self.script {
@@ -103,7 +139,9 @@ public final class StandInMacLink: MacLink {
     private func run(_ command: [String: Any]) {
         let fresh = command["asIs"] as? Bool != true
         if let name = command["request"] as? String, let bytes = vectors[name] {
-            deliver(fresh ? Self.restamped(bytes, nowMs: UInt64(Date().timeIntervalSince1970 * 1000)) : bytes, reqID: RequestBytes.decode(bytes)?.nonce)
+            let delivered = fresh ? Self.restamped(bytes, nowMs: UInt64(Date().timeIntervalSince1970 * 1000), nonce: nextNonce()) : bytes
+            latest[name] = deliver(delivered, reqID: RequestBytes.decode(delivered)?.nonce)
+            save()
         }
         if let name = command["reject"] as? String, let bytes = rejects[name] {
             deliver(bytes, reqID: nil)
@@ -122,23 +160,34 @@ public final class StandInMacLink: MacLink {
         }
         if let agent = command["unpause"] as? String, let agentID = vectors.values.compactMap({ RequestBytes.decode($0) }).first(where: { $0.agentName == agent })?.agentID {
             epochs[agentID, default: 1] += 1
+            save()
         }
         if command["boot"] as? Bool == true {
             bootSeq += 1
-            receive?(bogoID, .boot(bootSeq: bootSeq, bootID: Data((0..<32).map { _ in UInt8.random(in: 0...255) })))
+            bootID = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+            seq = 0
+            save()
+            receive?(bogoID, .boot(bootSeq: bootSeq, bootID: bootID))
         }
     }
 
-    private func deliver(_ bytes: Data, reqID: Data?) {
+    private func nextNonce() -> Data {
         seq += 1
-        let id = reqID ?? bootID + withUnsafeBytes(of: seq.bigEndian) { Data($0) }
+        return bootID + withUnsafeBytes(of: seq.bigEndian) { Data($0) }
+    }
+
+    @discardableResult
+    private func deliver(_ bytes: Data, reqID: Data?) -> Data {
+        let id = reqID ?? nextNonce()
         sent[id] = bytes
+        save()
         let agent = RequestBytes.decode(bytes)?.agentID ?? Data()
         receive?(bogoID, .request(reqID: id, bootSeq: bootSeq, bytes: bytes, pauseEpoch: epochs[agent, default: 1], armDelayMs: Self.armDelayMs))
+        return id
     }
 
     private func nonce(_ name: String) -> Data? {
-        vectors[name].flatMap { RequestBytes.decode($0)?.nonce }
+        latest[name] ?? vectors[name].flatMap { RequestBytes.decode($0)?.nonce }
     }
 
     private func verify(alg: UInt16, signature: Data, reqID: Data, key: Data) -> Bool {
@@ -162,9 +211,11 @@ public final class StandInMacLink: MacLink {
         }
     }
 
-    static func restamped(_ bytes: Data, nowMs: UInt64) -> Data {
-        guard let request = RequestBytes.decode(bytes) else { return bytes }
-        var raw = [UInt8](bytes)
+    static func restamped(_ bytes: Data, nowMs: UInt64, nonce: Data) -> Data {
+        guard let request = RequestBytes.decode(bytes), nonce.count == request.nonce.count, let range = bytes.range(of: request.nonce) else { return bytes }
+        var renonced = bytes
+        renonced.replaceSubrange(range, with: nonce)
+        var raw = [UInt8](renonced)
         func write(_ value: UInt64, at offset: Int) {
             for index in 0..<8 { raw[offset + index] = UInt8(truncatingIfNeeded: value >> (56 - 8 * index)) }
         }

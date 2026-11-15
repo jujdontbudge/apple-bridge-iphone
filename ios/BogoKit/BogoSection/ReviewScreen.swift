@@ -87,7 +87,7 @@ struct ReviewScreen: View {
                 dismiss()
             }
         } message: {
-            Text("Its waiting requests are denied, and BOGO refuses new ones until you un-pause it on the Mac.")
+            Text("Its waiting requests end now, and BOGO refuses new ones until you un-pause it on the Mac.")
         }
         .safeAreaInset(edge: .bottom) {
             if open && !paused {
