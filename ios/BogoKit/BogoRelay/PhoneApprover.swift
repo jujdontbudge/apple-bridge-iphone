@@ -161,9 +161,15 @@ public final class PhoneApprover {
         ApprovalKey.delete(account: mac.keyAccount)
         var removed = mac
         removed.state = .removed
+        let now = clock()
         do {
             try store.transaction {
                 try store.save(removed)
+                for var record in records where record.bogoID == mac.bogoID && record.phase.isPending && record.receivedMs > 0 {
+                    record.phase = .ended(nil, .approverRevoked)
+                    record.changedMs = now
+                    try store.save(record)
+                }
                 try store.enqueue(.removed, to: mac.bogoID, nowMs: clock())
             }
         } catch {

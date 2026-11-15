@@ -67,9 +67,9 @@ struct AddMacScreen: View {
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(.tertiary)
                         }
-                        .foregroundStyle(.primary)
                         .padding(.vertical, 2)
                     }
+                    .tint(.primary)
                 }
             } footer: {
                 if !offers.isEmpty {

@@ -70,6 +70,8 @@ public final class Store {
     public func deleteMac(_ bogoID: Data) throws {
         try run("DELETE FROM macs WHERE bogo_id = ?", [.data(bogoID)])
         try run("DELETE FROM pauses WHERE bogo_id = ?", [.data(bogoID)])
+        try run("DELETE FROM records WHERE bogo_id = ?", [.data(bogoID)])
+        try run("DELETE FROM outbox WHERE bogo_id = ?", [.data(bogoID)])
     }
 
     public func records() throws -> [RequestRecord] {
