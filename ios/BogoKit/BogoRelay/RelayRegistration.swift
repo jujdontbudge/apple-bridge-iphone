@@ -168,7 +168,7 @@ final class RelayRegistration: RegistrationChannel {
         let sealed = try RegWire.seal(plain, key: key, offer: offer, phase: RegWire.regSubmit)
         do {
             try await Self.send(client, offer, RegWire.regSubmit, sealed)
-            let answer = try await Self.wait(client, offer, for: [RegWire.registered, RegWire.refused], timeout: .seconds(90))
+            let answer = try await Self.wait(client, offer, for: [RegWire.registered, RegWire.refused], timeout: .seconds(90), closed: .unanswered)
             if answer.phase == RegWire.refused {
                 let why = RegWire.open(answer.payload, key: key, offer: offer, phase: RegWire.refused).flatMap(RegWire.json)?["why"] as? String
                 throw RegistrationError.refused(why ?? "")
@@ -198,6 +198,7 @@ final class RelayRegistration: RegistrationChannel {
     }
 
     private static func wait(_ client: RelayClient, _ offer: Data, for phases: Set<UInt8>, timeout: Duration = .seconds(600),
+                             closed: RegistrationError = .macCancelled,
                              until cancelled: @MainActor () -> Bool = { false }) async throws -> (phase: UInt8, payload: Data) {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
@@ -205,10 +206,8 @@ final class RelayRegistration: RegistrationChannel {
             let messages: [RelayMessage]
             do {
                 messages = try await client.lobbyFetch(offer: offer)
-            } catch RelayError.status(404) {
-                throw RegistrationError.macCancelled
-            } catch RelayError.status(403) {
-                throw RegistrationError.macCancelled
+            } catch RelayError.status(404), RelayError.status(403) {
+                throw closed
             } catch {
                 try await Task.sleep(for: .seconds(1))
                 continue
