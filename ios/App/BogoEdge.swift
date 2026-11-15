@@ -10,6 +10,6 @@ final class BogoEdge: BogoHost {
     lazy var section = BogoSection(
         host: self,
         storageDirectory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("BOGO", isDirectory: true),
-        relayURL: URL(string: "https://bogo.eilmer.si")!
+        relayURL: URL(string: "https://bogo.eilmer.si:8443")!
     )
 }
