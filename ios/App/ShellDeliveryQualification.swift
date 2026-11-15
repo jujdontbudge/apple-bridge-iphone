@@ -45,7 +45,6 @@ final class ShellDeliveryQualification {
     var shellDiagnostics = false
     var confirmed = false
     var intentCount = 0
-    var connectorID: String?
 
     static var directory: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
 
@@ -73,7 +72,6 @@ final class ShellDeliveryQualification {
             let categories = await center.notificationCategories()
             center.setNotificationCategories(Set(categories.filter { $0.identifier != "bridge." + id }))
             UserDefaults.standard.removeObject(forKey: "approval." + id)
-            if ApprovalReview.shared.job?.command.command_id == id { ApprovalReview.shared.job = nil }
             try NotificationsCapability.removeResponse(id)
             let cacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("command-receipts.json")
             if FileManager.default.fileExists(atPath: cacheURL.path) {
@@ -109,19 +107,6 @@ final class ShellDeliveryQualification {
         while !condition() && Date() < deadline { try await Task.sleep(for: .milliseconds(250)) }
     }
 
-    func registerConnector(_ job: PhoneJob) throws {
-        guard request?.scenario == "APP-APPROVE-REAL", receipt?.counts["phase"] == 3, job.command.command_id.hasPrefix("connector:") else { return }
-        let url = Self.directory.appendingPathComponent("ab-real-backup.json")
-        var backup = try JSONDecoder().decode(ShellDeliveryBackup.self, from: Data(contentsOf: url))
-        backup.connector = job.command.command_id
-        try JSONEncoder().encode(backup).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        connectorID = job.command.command_id
-        if case .string(let body) = job.command.args["body"] {
-            receipt?.checks["connector_prompt_code_and_scopes"] = job.request_hash.count == 4 && job.request_hash.allSatisfy(\.isNumber) && body.contains("Code " + job.request_hash) && body.contains("messages:read") && body.contains("[ab-test] iPhone connection")
-        }
-        try save()
-    }
-
     func recordIntent(_ value: String) {
         guard Self.active, request?.scenario == "APP-INTENTS-REAL" else { return }
         intentCount += 1
@@ -136,7 +121,7 @@ final class ShellDeliveryQualification {
         defer { UIApplication.shared.isIdleTimerDisabled = idleTimer }
         var preferences: [String: Any] = [:]
         var activity: Activity<AgentTaskAttributes>?
-        let keys = ["notifications", "approvals", "widgets"].map { "capability.\($0).enabled" }
+        let keys = ["notifications", "widgets"].map { "capability.\($0).enabled" }
         do {
             try await Self.restoreBackup()
             for key in keys { preferences[key] = UserDefaults.standard.object(forKey: key) ?? NSNull() }
@@ -198,9 +183,9 @@ final class ShellDeliveryQualification {
                 try save()
                 if enabled { receipt?.checks["phone_focus_restored"] = await QualificationWait.until { center.focusStatus.isFocused == false } }
                 else { receipt?.checks["phone_focus_restored"] = false }
-            case "APP-CMD-REAL", "APP-NOTIFY-REAL", "APP-APPROVE-REAL":
+            case "APP-CMD-REAL", "APP-NOTIFY-REAL":
                 if request.scenario != "APP-CMD-REAL" {
-                    for key in keys.prefix(2) { UserDefaults.standard.set(true, forKey: key) }
+                    for key in keys.prefix(1) { UserDefaults.standard.set(true, forKey: key) }
                     instruction = "Allow notification alerts if requested."
                     let before = await UNUserNotificationCenter.current().notificationSettings()
                     receipt?.counts["notification_prompt_requested"] = before.authorizationStatus == .notDetermined ? 1 : 0
@@ -209,7 +194,7 @@ final class ShellDeliveryQualification {
                     let settings = await UNUserNotificationCenter.current().notificationSettings()
                     receipt?.checks["notification_authorized"] = settings.authorizationStatus == .authorized
                 }
-                instruction = request.scenario == "APP-APPROVE-REAL" ? "Open the [ab-test] approval notification, tap Approve, and complete Face ID." : "Tap [ab-test] Confirm on the notification if shown."
+                instruction = "Tap [ab-test] Confirm on the notification if shown."
                 receipt?.counts["phase"] = 2
                 receipt?.checks["ready"] = true
                 try save()
@@ -217,7 +202,6 @@ final class ShellDeliveryQualification {
                 let deadline = Date().addingTimeInterval(180)
                 var uploaded = false
                 while Date() < deadline {
-                    if request.scenario == "APP-APPROVE-REAL", receipt?.checks["face_id_succeeded"] == false { break }
                     if let command = request.command,
                        let data = try? Data(contentsOf: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("command-receipts.json")),
                        let cache = try? JSONDecoder().decode([String: Execution].self, from: data),
@@ -228,12 +212,6 @@ final class ShellDeliveryQualification {
                     try await Task.sleep(for: .milliseconds(250))
                 }
                 receipt?.checks["signed_result_uploaded"] = uploaded
-                if request.scenario == "APP-APPROVE-REAL" {
-                    receipt?.counts["phase"] = 3
-                    instruction = "Open [ab-test] iPhone connection, match the code in the Pro instructions, tap Allow, and complete Face ID."
-                    try save()
-                    try await wait { self.receipt?.checks["connector_decision_uploaded"] == true || self.receipt?.checks["connector_face_id_succeeded"] == false }
-                }
                 receipt?.counts["apns_wakes"] = PushDelivery.shared.wakeCount - before
                 if request.scenario == "APP-CMD-REAL" { receipt?.checks["apns_wake"] = PushDelivery.shared.wakeCount > before }
             case "APP-LIVE-REAL":
@@ -289,7 +267,6 @@ struct ShellDeliveryQualificationScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Bindable var proof = ShellDeliveryQualification.shared
     @State private var pairing = PairingState()
-    @Bindable private var approval = ApprovalReview.shared
     var body: some View {
         NavigationStack {
             List {
@@ -304,9 +281,6 @@ struct ShellDeliveryQualificationScreen: View {
                 }
                 Button("Confirm observations") { proof.confirmed = true }
             }.navigationTitle("[ab-test] Real qualification")
-        }
-        .sheet(isPresented: Binding(get: { approval.job != nil }, set: { if !$0 { approval.job = nil } })) {
-            if let job = approval.job { ApprovalReviewScreen(job: job) }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, proof.receipt?.done == false, proof.receipt?.checks["ready"] == true { Task { await PushDelivery.shared.drain() } }

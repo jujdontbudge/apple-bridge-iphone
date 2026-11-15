@@ -1,3 +1,4 @@
+import BogoSection
 import CryptoKit
 import Foundation
 import SwiftUI
@@ -111,10 +112,7 @@ final class PushDelivery {
                 let job = try open(packet, identity: identity)
                 guard job.expires > Int64(Date().timeIntervalSince1970), case .string(let target) = job.command.args["device_id"], target == identity.deviceID else { continue }
                 let id = job.command.command_id
-                if job.command.op == "bridge.approval" {
-                    try await ApprovalsCapability.deliver(job)
-                    continue
-                }
+                if job.command.op == "bridge.approval" { continue }
                 var result: PhoneResult
                 if let prior = cache[id] {
                     guard prior.hash == job.request_hash else { throw IdentityError.requestFailed }
@@ -170,6 +168,11 @@ final class BridgeAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificati
             }
         }
         UNUserNotificationCenter.current().delegate = self
+        Task {
+            let center = UNUserNotificationCenter.current()
+            let categories = await center.notificationCategories()
+            center.setNotificationCategories(categories.filter { $0.identifier != BogoSection.requestCategory }.union(BogoSection.notificationCategories))
+        }
         PushDelivery.shared.status = "Registering"
         #if DEBUG
         if !RealQualification.active && !ProcessInfo.processInfo.arguments.contains("--ab-real-restore") { application.registerForRemoteNotifications() }
@@ -185,27 +188,23 @@ final class BridgeAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificati
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping @Sendable () -> Void) {
         let info = response.notification.request.content.userInfo
+        let action = response.actionIdentifier
+        if let wake = BogoSection.wake(info) {
+            NotificationCompletion.deliver({ @MainActor in
+                await BogoEdge.shared.section.notificationResponse(wake, action: action)
+            }, completion: completionHandler)
+            return
+        }
         let id = info["command_id"] as? String
         let hash = info["request_hash"] as? String
         let buttons = info["buttons"] as? [String]
-        let approval = info["approval"] as? Bool == true
-        let expires = info["expires"] as? Int64
-        let action = response.actionIdentifier
         NotificationCompletion.deliver({ @MainActor in
-            await self.handleNotificationResponse(id: id, hash: hash, buttons: buttons, approval: approval, expires: expires, action: action)
+            await self.handleNotificationResponse(id: id, hash: hash, buttons: buttons, action: action)
         }, completion: completionHandler)
     }
 
     @MainActor
-    private func handleNotificationResponse(id: String?, hash: String?, buttons: [String]?, approval: Bool, expires: Int64?, action: String) async {
-        if approval, let id, let hash, let expires {
-            do {
-                try ApprovalsCapability.present(id: id, hash: hash, action: action, expires: expires)
-            } catch {
-                await MainActor.run { PushDelivery.shared.status = "Approval pending" }
-            }
-            return
-        }
+    private func handleNotificationResponse(id: String?, hash: String?, buttons: [String]?, action: String) async {
         guard let id, let hash, let buttons else { return }
         do {
             try NotificationsCapability.record(id: id, hash: hash, buttons: buttons, action: action)
@@ -217,6 +216,8 @@ final class BridgeAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificati
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        BogoEdge.shared.pushToken = deviceToken
+        BogoEdge.shared.section.pushTokenChanged(deviceToken)
         Task { await PushDelivery.shared.register(token: token) }
     }
 
@@ -225,6 +226,10 @@ final class BridgeAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificati
     }
 
     func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any], fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        if let wake = BogoSection.wake(userInfo) {
+            Task { completionHandler(await BogoEdge.shared.section.remoteNotification(wake)) }
+            return
+        }
         PushDelivery.shared.wakeCount += 1
         Task {
             await PushDelivery.shared.drain()

@@ -1,3 +1,4 @@
+import BogoSection
 import SwiftUI
 
 @main
@@ -22,24 +23,24 @@ struct AppleBridgeApp: App {
 struct BridgeSettings: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var pairing = PairingState()
-    @Bindable private var approval = ApprovalReview.shared
+    @State private var selected = ShellTab.settings
+    @Bindable private var bogo = BogoEdge.shared.section
     var body: some View {
-        TabView {
+        TabView(selection: $selected) {
             ForEach(ShellModel.tabs) { tab in
                 Group {
                     switch tab {
                     case .settings: settings
-                    case .approvals: ShellApprovalsScreen()
+                    case .bogo: bogo.tab
                     case .diagnostics:
                         NavigationStack { DiagnosticsScreen(pairing: pairing) }
                     }
                 }
                 .tabItem { Label(tab.title, systemImage: tab.symbol) }
+                .tag(tab)
             }
         }
-        .sheet(isPresented: Binding(get: { approval.job != nil }, set: { if !$0 { approval.job = nil } })) {
-            if let job = approval.job { ApprovalReviewScreen(job: job) }
-        }
+        .onChange(of: bogo.focusRequests) { selected = .bogo }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active && !RealQualification.active {
                 LocationCapability.resume()
@@ -114,33 +115,4 @@ struct DiagnosticsScreen: View {
 
 #Preview {
     BridgeSettings()
-}
-
-struct ShellApprovalsScreen: View {
-    @Bindable private var approval = ApprovalReview.shared
-
-    var body: some View {
-        NavigationStack {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let rows = ShellModel.approvals(ApprovalsCapability.pending(), now: Int64(context.date.timeIntervalSince1970))
-                List {
-                    if rows.isEmpty { Text(ShellModel.emptyApprovals) }
-                    ForEach(rows) { row in
-                        Button {
-                            guard let job = ApprovalsCapability.stored(row.id), job.expires > Int64(Date().timeIntervalSince1970) else { return }
-                            approval.job = job
-                        } label: {
-                            VStack(alignment: .leading) {
-                                Text(row.title)
-                                Text(row.summary).font(.caption).privacySensitive()
-                            }
-                        }
-                        .disabled(!ApprovalsCapability.enabled)
-                    }
-                }
-            }
-            .navigationTitle("Approvals")
-            .refreshable { await PushDelivery.shared.drain() }
-        }
-    }
 }
