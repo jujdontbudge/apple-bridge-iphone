@@ -16,6 +16,7 @@ struct AddMacScreen: View {
         case compare(RegistrationChannel, MacConfirmation?)
         case confirming(RegistrationChannel, MacConfirmation)
         case added(String)
+        case waiting(String)
         case failed(String)
     }
 
@@ -27,6 +28,7 @@ struct AddMacScreen: View {
                 case .compare(let channel, let confirmation): compare(channel, confirmation, busy: false)
                 case .confirming(let channel, let confirmation): compare(channel, confirmation, busy: true)
                 case .added(let name): added(name)
+                case .waiting(let name): waiting(name)
                 case .failed(let reason): failed(reason)
                 }
             }
@@ -34,7 +36,7 @@ struct AddMacScreen: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    if case .added = step {} else {
+                    if case .added = step {} else if case .waiting = step {} else {
                         Button("Cancel", role: .cancel) {
                             if case .compare(let channel, _) = step { channel.abort() }
                             dismiss()
@@ -154,6 +156,28 @@ struct AddMacScreen: View {
         }
     }
 
+    private func waiting(_ name: String) -> some View {
+        VStack(spacing: 0) {
+            Spacer()
+            VStack(spacing: 14) {
+                Image(systemName: "clock")
+                    .font(.system(size: 52, weight: .regular))
+                    .foregroundStyle(.secondary)
+                Text("Waiting for \(name)").font(.title2.weight(.semibold))
+                Text("Your Mac hasn’t answered yet. It finishes on its own once the Mac confirms, and shows under Macs until then.")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 32)
+            Spacer()
+            Button { dismiss() } label: { Text("Done").frame(maxWidth: .infinity) }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+        }
+    }
+
     private func failed(_ reason: String) -> some View {
         ContentUnavailableView {
             Label("Mac Not Added", systemImage: "exclamationmark.triangle")
@@ -188,8 +212,13 @@ struct AddMacScreen: View {
                 step = .compare(channel, nil)
                 let confirmation = try await channel.macConfirmation()
                 if case .compare = step { step = .compare(channel, confirmation) }
+            } catch RegistrationError.tampered {
+                step = .failed("The codes couldn’t be checked safely, so nothing was added. Run `bogo approver add` again.")
             } catch {
-                if case .compare = step { step = .failed("The Mac stopped the attempt. Run `bogo approver add` again.") }
+                switch step {
+                case .choose, .compare: step = .failed("The Mac stopped the attempt. Run `bogo approver add` again.")
+                default: break
+                }
             }
         }
     }
@@ -204,6 +233,12 @@ struct AddMacScreen: View {
                 step = .compare(channel, confirmation)
             } catch ApprovalKeyError.notRecognized {
                 step = .failed("Face ID didn’t match, so no key was created.")
+            } catch RegistrationError.unanswered {
+                step = .waiting(confirmation.macName)
+            } catch RegistrationError.refused(let why) {
+                step = .failed(why.isEmpty ? "Your Mac refused this iPhone. Nothing was registered." : "Your Mac refused this iPhone: \(why). Nothing was registered.")
+            } catch RegistrationError.macCancelled {
+                step = .failed("The Mac stopped the attempt. Nothing was registered.")
             } catch {
                 step = .failed("This iPhone couldn’t finish adding the Mac. Nothing was registered.")
             }
