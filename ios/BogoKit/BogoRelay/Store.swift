@@ -127,9 +127,8 @@ public final class Store {
            !((try? query("SELECT 1 FROM outbox WHERE bogo_id = ? AND kind = 'regResend' AND sent_ms IS NULL", [.data(bogoID)]) { _ in true }) ?? []).isEmpty {
             return
         }
-        if case .sync = message,
-           !((try? query("SELECT 1 FROM outbox WHERE bogo_id = ? AND kind = 'sync' AND body = ? AND sent_ms IS NULL", [.data(bogoID), .data(message.body)]) { _ in true }) ?? []).isEmpty {
-            return
+        if case .sync = message {
+            try run("DELETE FROM outbox WHERE bogo_id = ? AND kind = 'sync' AND body = ? AND sent_ms IS NULL", [.data(bogoID), .data(message.body)])
         }
         var msgID = Data(count: 16)
         _ = msgID.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
