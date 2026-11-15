@@ -9,6 +9,7 @@ struct AddMacScreen: View {
     @State private var offers: [RegistrationOffer] = []
     @State private var looking = true
     @State private var step: Step = .choose
+    @State private var offerName = ""
 
     enum Step {
         case choose
@@ -50,21 +51,29 @@ struct AddMacScreen: View {
             Section {
                 ForEach(offers) { offer in
                     Button { start(offer) } label: {
-                        HStack(spacing: 14) {
-                            Image(systemName: "macbook").font(.title3).frame(width: 30)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(offer.label).foregroundStyle(.primary)
-                                Text("Waiting " + offer.opened.formatted(.relative(presentation: .named)))
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                        HStack {
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(offer.label)
+                                    Text("Ready to add")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: "macbook")
                             }
+                            Spacer()
+                            Image(systemName: "chevron.forward")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
                         }
-                        .padding(.vertical, 4)
+                        .foregroundStyle(.primary)
+                        .padding(.vertical, 2)
                     }
                 }
             } footer: {
                 if !offers.isEmpty {
-                    Text("Choose the Mac where you ran bogo approver add.")
+                    Text("Choose the Mac where you ran `bogo approver add`.")
                 }
             }
         }
@@ -73,7 +82,7 @@ struct AddMacScreen: View {
                 ContentUnavailableView {
                     Label("Looking for Your Mac", systemImage: "macbook")
                 } description: {
-                    Text("On your Mac, run bogo approver add. It appears here while the command runs.")
+                    Text("On your Mac, run `bogo approver add`. It appears here while the command runs.")
                 } actions: {
                     ProgressView()
                 }
@@ -85,6 +94,9 @@ struct AddMacScreen: View {
         VStack(spacing: 0) {
             Spacer()
             VStack(spacing: 14) {
+                Text(confirmation?.macName ?? offerName)
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
                 Text(spaced(channel.code))
                     .font(.system(size: 56, weight: .semibold, design: .rounded))
                     .monospacedDigit()
@@ -95,6 +107,7 @@ struct AddMacScreen: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 300)
             }
+            Spacer()
             Spacer()
             Group {
                 if let confirmation {
@@ -168,6 +181,7 @@ struct AddMacScreen: View {
     }
 
     private func start(_ offer: RegistrationOffer) {
+        offerName = offer.label
         Task {
             do {
                 let channel = try await approver.beginRegistration(offer)
@@ -175,7 +189,7 @@ struct AddMacScreen: View {
                 let confirmation = try await channel.macConfirmation()
                 if case .compare = step { step = .compare(channel, confirmation) }
             } catch {
-                if case .compare = step { step = .failed("The Mac stopped the attempt. Run bogo approver add again.") }
+                if case .compare = step { step = .failed("The Mac stopped the attempt. Run `bogo approver add` again.") }
             }
         }
     }

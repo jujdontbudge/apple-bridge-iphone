@@ -5,25 +5,20 @@ import SwiftUI
 struct MacsScreen: View {
     let approver: PhoneApprover
     let addMac: () -> Void
-    @State private var removing: MacRecord?
 
     var body: some View {
         List {
             if !approver.macs.isEmpty {
                 Section {
                     ForEach(approver.macs) { mac in
-                        MacRow(mac: mac)
-                            .swipeActions {
-                                if mac.state != .removed {
-                                    Button("Remove", role: .destructive) { removing = mac }
-                                }
-                            }
-                            .contextMenu {
-                                if mac.state != .removed {
-                                    Button("Remove", systemImage: "trash", role: .destructive) { removing = mac }
-                                }
-                            }
+                        NavigationLink {
+                            MacDetail(approver: approver, id: mac.bogoID)
+                        } label: {
+                            MacRow(mac: mac)
+                        }
                     }
+                } footer: {
+                    Text("Agents on these Macs ask this iPhone before a protected tool runs.")
                 }
                 Section {
                     Button("Add Mac", systemImage: "plus", action: addMac)
@@ -35,19 +30,11 @@ struct MacsScreen: View {
                 ContentUnavailableView {
                     Label("No Macs", systemImage: "macbook")
                 } description: {
-                    Text("On your Mac, run bogo approver add, then add it here.")
+                    Text("On your Mac, run `bogo approver add`, then add it here.")
                 } actions: {
                     Button("Add Mac", action: addMac).buttonStyle(.borderedProminent)
                 }
             }
-        }
-        .confirmationDialog("Remove \(removing?.name ?? "this Mac")?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
-            Button("Remove Mac", role: .destructive) {
-                if let removing { approver.remove(removing) }
-                removing = nil
-            }
-        } message: {
-            Text("This iPhone can no longer approve requests from it. You can add it again later.")
         }
     }
 }
@@ -56,27 +43,61 @@ struct MacRow: View {
     let mac: MacRecord
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "macbook")
-                .font(.title3)
-                .foregroundStyle(mac.state == .active ? Color.accentColor : .secondary)
-                .frame(width: 30)
-            VStack(alignment: .leading, spacing: 3) {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(mac.name)
-                Text(status)
+                Text(MacRow.status(mac))
                     .font(.subheadline)
                     .foregroundStyle(mac.state == .needsReRegistration ? .orange : .secondary)
             }
+        } icon: {
+            Image(systemName: "macbook")
+                .foregroundStyle(mac.state == .active ? Color.primary : .secondary)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
     }
 
-    private var status: String {
+    static func status(_ mac: MacRecord) -> String {
         switch mac.state {
-        case .active: return "Added " + Formatting.when(Date(timeIntervalSince1970: TimeInterval(mac.addedMs) / 1000)).lowercasedFirst
+        case .active: return "Connected"
         case .waiting: return "Waiting for the Mac to confirm"
-        case .needsReRegistration: return "Face ID changed. Add this Mac again."
-        case .removed: return "Removed here; the Mac hasn’t confirmed yet"
+        case .needsReRegistration: return "Face ID changed · add again"
+        case .removed: return "Removing · waiting for the Mac"
+        }
+    }
+}
+
+struct MacDetail: View {
+    let approver: PhoneApprover
+    let id: Data
+    @Environment(\.dismiss) private var dismiss
+    @State private var removing = false
+
+    var body: some View {
+        if let mac = approver.mac(id) {
+            List {
+                Section {
+                    LabeledContent("Status", value: MacRow.status(mac))
+                    LabeledContent("Added", value: Date(timeIntervalSince1970: TimeInterval(mac.addedMs) / 1000).formatted(date: .abbreviated, time: .shortened))
+                    LabeledContent("Requests", value: "\(approver.records.filter { $0.bogoID == mac.bogoID && $0.receivedMs > 0 }.count)")
+                }
+                if mac.state != .removed {
+                    Section {
+                        Button("Remove Mac", role: .destructive) { removing = true }
+                    } footer: {
+                        Text("This iPhone stops approving requests from \(mac.name). You can add it again later.")
+                    }
+                }
+            }
+            .navigationTitle(mac.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .tabBar)
+            .confirmationDialog("Remove \(mac.name)?", isPresented: $removing, titleVisibility: .visible) {
+                Button("Remove Mac", role: .destructive) {
+                    approver.remove(mac)
+                    dismiss()
+                }
+            }
         }
     }
 }

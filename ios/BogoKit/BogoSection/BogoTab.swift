@@ -118,53 +118,49 @@ struct InboxRow: View {
 
     var body: some View {
         let record = entry.primary
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
                 if let request = record.request {
-                    let review = Review(request)
-                    Text(Formatting.headline(review) ?? request.tool)
+                    Text(Formatting.headline(Review(request)) ?? request.tool)
                         .font(.headline)
-                        .lineLimit(1)
-                    Text(detail(request, review: review))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 } else {
-                    Label("Unreadable request", systemImage: "exclamationmark.triangle")
-                        .font(.headline)
-                    Text(approver.mac(record.bogoID)?.name ?? "Unknown Mac")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    Text("Unreadable request").font(.headline)
                 }
-                if !entry.live, let status = Formatting.status(record, now: now) {
-                    Text(status)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 6) {
-                Text(Formatting.when(Date(timeIntervalSince1970: TimeInterval(entry.records.map(\.receivedMs).max() ?? 0) / 1000)))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                 if entry.count > 1 {
-                    Text("\(entry.count)")
-                        .font(.caption.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.accentColor))
+                    Text("×\(entry.count)")
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
                         .accessibilityLabel("\(entry.count) identical requests")
                 }
+                Spacer(minLength: 8)
+                Text(Formatting.when(Date(timeIntervalSince1970: TimeInterval(entry.records.map(\.receivedMs).max() ?? 0) / 1000)))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Group {
+                if let request = record.request {
+                    Text(detail(request))
+                } else {
+                    Text((approver.mac(record.bogoID)?.name ?? "Unknown Mac") + " · Can’t be approved")
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            if !entry.live, let status = Formatting.status(record, now: now) {
+                Text(status)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
         .contentShape(Rectangle())
         .opacity(entry.live ? 1 : 0.45)
     }
 
-    private func detail(_ request: ApprovalRequest, review: Review) -> String {
-        let tool = Formatting.headline(review) == nil ? request.upstream : request.tool
-        return tool + " · " + request.agentName
+    private func detail(_ request: ApprovalRequest) -> String {
+        let what = Formatting.headline(Review(request)) == nil ? request.upstream : request.tool
+        return request.agentName + " · " + what
     }
 }

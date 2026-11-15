@@ -41,17 +41,16 @@ struct HistoryRow: View {
                     Text(Formatting.headline(Review(request)) ?? request.tool)
                         .font(.headline)
                         .lineLimit(1)
-                    Text(request.tool + " · " + request.agentName)
+                    Text(request.agentName + " · " + status)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                 } else {
                     Text("Unreadable request").font(.headline)
+                    Text(status)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
-                Text(status)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
             }
             Spacer(minLength: 8)
             Text(Formatting.when(Date(timeIntervalSince1970: TimeInterval(record.changedMs) / 1000)))
@@ -62,9 +61,12 @@ struct HistoryRow: View {
     }
 
     private var status: String {
-        var text = Formatting.status(record, now: approver.nowMs) ?? ""
-        if case .denied(let note?) = record.phase.decision { text += " · “\(note)”" }
-        return text
+        switch record.phase.decision {
+        case .approved?: return "Approved"
+        case .denied(let note?)?: return "Denied · “\(note)”"
+        case .denied?: return "Denied"
+        case nil: return "Refused · agent paused"
+        }
     }
 
     private var symbol: String {

@@ -25,6 +25,7 @@ public struct Review: Sendable {
         public let label: String?
         public let leaf: ArgumentValue?
         public let container: Container?
+        public let highlighted: Bool
     }
 
     public let request: ApprovalRequest
@@ -59,13 +60,14 @@ public struct Review: Sendable {
         self.highlights = highlights
         self.warnings = MismatchRule.warnings(justification: request.justification, money: money, unformattable: unformattable)
         var rows: [ArgumentRow] = []
+        let marked = Set(request.hints.map(\.path))
         switch request.arguments {
         case .object(let members)? where !members.isEmpty:
-            for member in members { Review.flatten(member.value, label: member.key, depth: 0, into: &rows) }
+            for member in members { Review.flatten(member.value, label: member.key, path: [.key(member.key)], marked: marked, depth: 0, into: &rows) }
         case .array(let items)? where !items.isEmpty:
-            for (index, item) in items.enumerated() { Review.flatten(item, label: "[\(index)]", depth: 0, into: &rows) }
+            for (index, item) in items.enumerated() { Review.flatten(item, label: "[\(index)]", path: [.index(UInt32(index))], marked: marked, depth: 0, into: &rows) }
         case let value?:
-            Review.flatten(value, label: nil, depth: 0, into: &rows)
+            Review.flatten(value, label: nil, path: [], marked: marked, depth: 0, into: &rows)
         case nil:
             break
         }
@@ -83,16 +85,17 @@ public struct Review: Sendable {
         return text.isEmpty ? "arguments" : text
     }
 
-    private static func flatten(_ value: ArgumentValue, label: String?, depth: Int, into rows: inout [ArgumentRow]) {
+    private static func flatten(_ value: ArgumentValue, label: String?, path: [PathElement], marked: Set<[PathElement]>, depth: Int, into rows: inout [ArgumentRow]) {
+        let highlighted = marked.contains(path)
         switch value {
         case .object(let members) where !members.isEmpty:
-            rows.append(ArgumentRow(id: rows.count, depth: depth, label: label, leaf: nil, container: .object(members.count)))
-            for member in members { flatten(member.value, label: member.key, depth: depth + 1, into: &rows) }
+            rows.append(ArgumentRow(id: rows.count, depth: depth, label: label, leaf: nil, container: .object(members.count), highlighted: highlighted))
+            for member in members { flatten(member.value, label: member.key, path: path + [.key(member.key)], marked: marked, depth: depth + 1, into: &rows) }
         case .array(let items) where !items.isEmpty:
-            rows.append(ArgumentRow(id: rows.count, depth: depth, label: label, leaf: nil, container: .array(items.count)))
-            for (index, item) in items.enumerated() { flatten(item, label: "[\(index)]", depth: depth + 1, into: &rows) }
+            rows.append(ArgumentRow(id: rows.count, depth: depth, label: label, leaf: nil, container: .array(items.count), highlighted: highlighted))
+            for (index, item) in items.enumerated() { flatten(item, label: "[\(index)]", path: path + [.index(UInt32(index))], marked: marked, depth: depth + 1, into: &rows) }
         default:
-            rows.append(ArgumentRow(id: rows.count, depth: depth, label: label, leaf: value, container: nil))
+            rows.append(ArgumentRow(id: rows.count, depth: depth, label: label, leaf: value, container: nil, highlighted: highlighted))
         }
     }
 }

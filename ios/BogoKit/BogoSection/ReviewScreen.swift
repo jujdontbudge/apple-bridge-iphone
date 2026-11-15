@@ -24,6 +24,7 @@ struct ReviewScreen: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .onAppear { arm() }
         .onChange(of: id) { arm() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { arm() } }
@@ -179,7 +180,7 @@ struct WillExecute: View {
         Section {
             if let rows = review.arguments {
                 if rows.isEmpty {
-                    Text("No fields").foregroundStyle(.secondary)
+                    Text("Empty arguments { }").foregroundStyle(.secondary)
                 }
                 ForEach(rows) { row in
                     ArgumentRowView(row: row)
@@ -199,30 +200,27 @@ struct HighlightRow: View {
     var body: some View {
         switch highlight.value {
         case .money(let amount, let token):
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(amount.formatted)
-                    .font(.system(.largeTitle, design: .rounded, weight: .semibold))
+                    .font(.system(size: 44, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                Text("\(Formatting.visible(highlight.label)) · \(token) \(amount.currency) minor units")
-                    .font(.footnote)
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
+                Text("\(Formatting.visible(highlight.label)) \(token)")
+                    .font(.subheadline.monospaced())
                     .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 8)
         case .unformattable(let value, let currency):
-            LabeledContent {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(Formatting.value(value))
-                    Text("Can’t format as \(currency)").font(.footnote).foregroundStyle(.orange)
-                }
-            } label: {
-                Text(Formatting.visible(highlight.label))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Formatting.value(value)).font(.title3.monospaced())
+                Text("\(Formatting.visible(highlight.label)) can’t be shown as \(currency)")
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
             }
-        case .text(let value):
-            LabeledContent {
-                Text(Formatting.value(value)).multilineTextAlignment(.trailing)
-            } label: {
-                Text(Formatting.visible(highlight.label))
-            }
+            .padding(.vertical, 4)
+        case .text:
+            EmptyView()
         case .missing:
             LabeledContent {
                 Text("Not in this request").foregroundStyle(.secondary)
@@ -237,22 +235,54 @@ struct ArgumentRowView: View {
     let row: Review.ArgumentRow
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            if let label = row.label {
-                Text(Formatting.visible(label))
-                    .foregroundStyle(.secondary)
-                    .layoutPriority(1)
-            }
-            Spacer(minLength: 0)
-            if let leaf = row.leaf {
-                Text(Formatting.value(leaf))
-                    .multilineTextAlignment(.trailing)
-                    .textSelection(.enabled)
-            } else if let container = row.container {
-                Text(container.description).foregroundStyle(.tertiary)
+        Group {
+            if stacked {
+                VStack(alignment: .leading, spacing: 6) {
+                    label
+                    if let leaf = row.leaf {
+                        Text(Formatting.value(leaf))
+                            .font(multiline ? .callout.monospaced() : .body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    label
+                    Spacer(minLength: 0)
+                    if let leaf = row.leaf {
+                        Text(Formatting.value(leaf))
+                            .multilineTextAlignment(.trailing)
+                            .textSelection(.enabled)
+                    } else if let container = row.container {
+                        Text(container.description).foregroundStyle(.tertiary)
+                    }
+                }
             }
         }
         .padding(.leading, CGFloat(row.depth) * 16)
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        if let text = row.label {
+            Text(Formatting.visible(text))
+                .foregroundStyle(row.highlighted ? .primary : .secondary)
+                .fontWeight(row.highlighted ? .semibold : .regular)
+        }
+    }
+
+    private var multiline: Bool {
+        if case .string(let text)? = row.leaf { return text.contains("\n") }
+        return false
+    }
+
+    private var stacked: Bool {
+        switch row.leaf {
+        case .string(let text)?: return multiline || text.count > 26
+        case .number(let text)?: return text.count > 20
+        default: return false
+        }
     }
 }
 
@@ -272,26 +302,27 @@ struct AgentReason: View {
         let request = review.request
         Section {
             if let justification = request.justification {
-                Text(justification.isEmpty ? AttributedString("Empty reason") : Formatting.visible(justification))
-                    .foregroundStyle(justification.isEmpty ? .secondary : .primary)
-                    .italic(!justification.isEmpty)
-                    .textSelection(.enabled)
+                if justification.isEmpty {
+                    Text("Empty reason").foregroundStyle(.secondary)
+                } else {
+                    Text(Formatting.visible(justification, quoted: true)).textSelection(.enabled)
+                }
             } else {
                 Text("No reason given").foregroundStyle(.secondary)
             }
             ForEach(review.warnings, id: \.self) { warning in
                 Label(warning, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
-                    .font(.subheadline.weight(.medium))
+                    .font(.subheadline.weight(.semibold))
             }
-            LabeledContent("Client says it is") {
+            LabeledContent("Client") {
                 if let client = request.clientName { Text(Formatting.visible(client)) } else { Text("Not reported").foregroundStyle(.secondary) }
             }
             LabeledContent("Session") { Text(request.sessionTag).font(.body.monospaced()) }
         } header: {
-            Label("Agent’s reason (unverified)", systemImage: "quote.bubble")
+            Text("Agent’s reason (unverified)")
         }
-        .listRowBackground(Color.orange.opacity(0.07))
+        .listRowBackground(Color.orange.opacity(0.08))
     }
 }
 
@@ -301,16 +332,18 @@ struct Unreadable: View {
 
     var body: some View {
         Section {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Unreadable request", systemImage: "exclamationmark.triangle.fill")
-                    .font(.headline)
+            VStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 40))
                     .foregroundStyle(.orange)
-                Text("BOGO couldn’t read what this request would run, so it can’t be approved. You can deny it.")
+                Text("BOGO couldn’t read what this request would run, so it can’t be approved.")
+                    .multilineTextAlignment(.center)
+                Text("\(macName ?? "Unknown Mac") · \(record.bytes.count) bytes")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 4)
-            LabeledContent("From") { Text(macName ?? "Unknown Mac") }
-            LabeledContent("Size") { Text("\(record.bytes.count) bytes") }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 20)
         }
     }
 }
