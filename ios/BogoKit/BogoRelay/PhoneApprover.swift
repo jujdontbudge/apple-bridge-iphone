@@ -189,7 +189,12 @@ public final class PhoneApprover {
     public func becameActive() async {
         checkBiometry()
         if let store {
-            for record in records where Self.awaitingOutcome(record.phase) { try? store.markUnsent(reqID: record.reqID) }
+            let waiting = records.filter { Self.awaitingOutcome($0.phase) }
+            for record in waiting { try? store.markUnsent(reqID: record.reqID) }
+            for mac in macs where mac.state == .active {
+                let open = waiting.filter { $0.bogoID == mac.bogoID }.map(\.reqID)
+                if !open.isEmpty { try? store.enqueue(.sync(reqIDs: open), to: mac.bogoID, nowMs: clock()) }
+            }
         }
         await link.fetch()
         await flush()

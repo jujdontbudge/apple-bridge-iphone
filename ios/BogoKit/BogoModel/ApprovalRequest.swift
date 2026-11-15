@@ -14,9 +14,28 @@ public struct ArgumentMember: Equatable, Sendable {
     public let value: ArgumentValue
 }
 
-public enum PathElement: Equatable, Hashable, Sendable {
+public enum PathElement: Hashable, Sendable {
     case key(String)
     case index(UInt32)
+
+    public static func == (lhs: PathElement, rhs: PathElement) -> Bool {
+        switch (lhs, rhs) {
+        case (.key(let left), .key(let right)): return left.utf8.elementsEqual(right.utf8)
+        case (.index(let left), .index(let right)): return left == right
+        default: return false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .key(let key):
+            hasher.combine(0)
+            for byte in key.utf8 { hasher.combine(byte) }
+        case .index(let index):
+            hasher.combine(1)
+            hasher.combine(index)
+        }
+    }
 }
 
 public enum DisplayFormat: Equatable, Sendable {
@@ -63,7 +82,7 @@ public struct ApprovalRequest: Equatable, Sendable {
         for element in path {
             switch (element, current) {
             case (.key(let key), .object(let members)?):
-                current = members.first { $0.key == key }?.value
+                current = members.first { $0.key.utf8.elementsEqual(key.utf8) }?.value
             case (.index(let index), .array(let items)?):
                 current = Int(index) < items.count ? items[Int(index)] : nil
             default:
