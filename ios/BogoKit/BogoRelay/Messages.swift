@@ -11,8 +11,6 @@ public enum MacMessage: Equatable, Sendable {
     case registered(txID: Data, approverID: Data)
     case revokedAck
 
-    /// Parses an opened envelope (RELAY-PROTOCOL "iPhone route messages"). The
-    /// JSON `type` must agree with the header's type byte.
     public init?(kind: UInt8, body: Data) {
         guard let fields = try? JSONSerialization.jsonObject(with: body) as? [String: Any], let type = fields["type"] as? String else { return nil }
         func bytes(_ key: String) -> Data? { (fields[key] as? String).flatMap(Hex.data) }
@@ -58,7 +56,6 @@ public enum PhoneMessage: Equatable, Sendable {
     case regResend(txID: Data)
     case removed
 
-    /// The envelope header's type byte.
     public var typeByte: UInt8 {
         switch self {
         case .approval: return 1
@@ -169,9 +166,7 @@ public struct MacRecord: Identifiable, Equatable, Sendable {
     public var state: MacState
     public let addedMs: UInt64
     public var bootSeq: UInt64
-    /// How the relay reaches this Mac; nil for the Debug stand-in Mac.
     public var route: MacRoute?
-    /// The push token this Mac was last told about.
     public var pushToken: Data?
 
     public init(bogoID: Data, name: String, keyAccount: String, approvalPublicKey: Data, approverID: Data?, biometryState: Data?, state: MacState,
@@ -192,8 +187,6 @@ public struct MacRecord: Identifiable, Equatable, Sendable {
     public var id: String { Hex.string(bogoID) }
 }
 
-/// What the phone keeps to reach one Mac through the relay. The channel keys
-/// themselves stay in the Keychain under `channelAccount`.
 public struct MacRoute: Equatable, Sendable {
     public let macE2E: Data
     public let macMailbox: String
@@ -266,13 +259,9 @@ public enum Registration {
 }
 
 public enum RegistrationError: Error, Equatable {
-    /// The owner said no on the Mac, or the Mac stopped the attempt.
     case macCancelled
-    /// The Mac checked the phone's submission and refused it; nothing was registered.
     case refused(String)
-    /// The Mac's reveal didn't match its commitment.
     case tampered
-    /// The submission went out but no answer came back; the Mac may still have registered this phone.
     case unanswered
 }
 
@@ -280,11 +269,7 @@ public enum RegistrationError: Error, Equatable {
 public protocol RegistrationChannel: AnyObject {
     var code: String { get }
     func macConfirmation() async throws -> MacConfirmation
-    /// App Attest's client data hash, binding the transcript, the challenge,
-    /// the approval key and this channel's own keys.
     func clientDataHash(approvalKey: Data) -> Data
-    /// Saves this channel's keys and says how the relay reaches the Mac; nil
-    /// for the stand-in Mac.
     func saveRoute() throws -> (route: MacRoute, approverID: Data)?
     func submit(_ submission: RegistrationSubmission) async throws -> Registered
     func abort()
@@ -292,15 +277,10 @@ public protocol RegistrationChannel: AnyObject {
 
 @MainActor
 public protocol MacLink: AnyObject {
-    /// Applies one message from a Mac. `msgID` is the envelope's ID when there
-    /// is one; it returns true once the effect (or the decision to drop the
-    /// message) is durable, and only then is the message acknowledged.
     var receive: ((Data, Data?, MacMessage) -> Bool)? { get set }
-    /// True if a message with this ID was already applied for this Mac.
     var applied: ((Data, Data) -> Bool)? { get set }
     func start(macs: [MacRecord])
     func fetch() async
-    /// The bytes sent for this outbox row; sealed once and reused on every resend.
     func seal(_ message: PhoneMessage, msgID: Data, for mac: MacRecord) throws -> Data
     func send(_ message: PhoneMessage, sealed: Data, msgID: Data, to mac: MacRecord) async throws
     func offers(excluding macs: [MacRecord]) async -> [RegistrationOffer]

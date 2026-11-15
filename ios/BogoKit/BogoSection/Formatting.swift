@@ -110,8 +110,6 @@ enum Formatting {
         }
     }
 
-    /// An approval stood if the Mac counted it and nothing ended the request
-    /// before it could run.
     static func approvalStood(_ result: Outcome) -> Bool {
         result == .executed || result == .unknown
     }
@@ -120,8 +118,6 @@ enum Formatting {
         case approved, denied, ended, paused
     }
 
-    /// What History shows for one record: an approval reads as approved only
-    /// while it still stands; one whose request ended reads as ended.
     static func history(_ record: RequestRecord) -> (text: String, mark: Mark) {
         switch record.phase {
         case .pending: return ("Waiting", .ended)

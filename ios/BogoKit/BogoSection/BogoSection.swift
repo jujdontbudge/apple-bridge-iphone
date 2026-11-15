@@ -36,8 +36,6 @@ public final class BogoSection {
     public init(host: BogoHost, storageDirectory: URL, relayURL: URL) {
         self.host = host
         #if DEBUG
-        // Debug builds may point at a local relay (`-BogoRelayURL https://localhost:8843`)
-        // and keep the in-process stand-in Mac for working without one.
         let url = UserDefaults.standard.string(forKey: "BogoRelayURL").flatMap(URL.init(string:)) ?? relayURL
         let link: MacLink = DebugMacLinks(relay: RelayMacLink(endpoint: RelayEndpoint(url: url)),
                                           standIn: StandInMacLink(directory: storageDirectory.appendingPathComponent("stand-in")))

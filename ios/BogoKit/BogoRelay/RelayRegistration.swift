@@ -3,9 +3,6 @@ import BogoModel
 import CryptoKit
 import Foundation
 
-/// Registration's wire formats over the relay lobby (RELAY-PROTOCOL
-/// "Registration over the lobby"): numeric comparison with a commitment, then
-/// phases sealed under the transcript key.
 enum RegWire {
     static let hello: UInt8 = 0x01
     static let commit: UInt8 = 0x02
@@ -77,7 +74,6 @@ enum RegWire {
     }
 }
 
-/// The phone's half of one registration attempt over the relay lobby.
 @MainActor
 final class RelayRegistration: RegistrationChannel {
     let code: String
@@ -92,8 +88,6 @@ final class RelayRegistration: RegistrationChannel {
 
     static let poll: Duration = .milliseconds(300)
 
-    /// HELLO, the Mac's commitment, the phone's nonce, the reveal: afterwards
-    /// both screens can show the same six digits.
     static func begin(client: RelayClient, keys: ChannelKeys, offer: LobbyOffer) async throws -> RelayRegistration {
         let ephemeral = Curve25519.KeyAgreement.PrivateKey()
         let ePubP = ephemeral.publicKey.rawRepresentation
@@ -160,8 +154,6 @@ final class RelayRegistration: RegistrationChannel {
         return (route, RegWire.approverID(txID))
     }
 
-    /// Sends the sealed submission and waits for REGISTERED or REFUSED. If the
-    /// lobby closes first, the answer may still come as `registered` in the mailbox.
     func submit(_ submission: RegistrationSubmission) async throws -> Registered {
         let fields: [String: Any] = [
             "approvalKey": Hex.string(submission.approvalPublicKey),
@@ -206,8 +198,6 @@ final class RelayRegistration: RegistrationChannel {
         try await client.lobbySend(offer: offer, msgID: RegWire.msgID(offer: offer, phase: phase), body: Data([phase]) + payload)
     }
 
-    /// Polls the lobby until one of `phases` arrives from the Mac. A MAC_ABORT
-    /// or a closed offer ends the attempt.
     private static func wait(_ client: RelayClient, _ offer: Data, for phases: Set<UInt8>, timeout: Duration = .seconds(600),
                              until cancelled: @MainActor () -> Bool = { false }) async throws -> (phase: UInt8, payload: Data) {
         let deadline = ContinuousClock.now + timeout

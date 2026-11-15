@@ -3,12 +3,6 @@ import BogoModel
 import CryptoKit
 import Foundation
 
-/// The real link to BOGO on a Mac: HPKE envelopes in relay mailboxes, one
-/// mailbox per registered Mac (ARCHITECTURE §3.11, §3.13 BogoRelay).
-///
-/// Inbound order for every message: drop a known message ID unopened, open and
-/// check it, apply it to the store, and only then acknowledge it to the relay.
-/// A message the store can't take yet stays in the mailbox and is fetched again.
 @MainActor
 public final class RelayMacLink: MacLink {
     public var receive: ((Data, Data?, MacMessage) -> Bool)?
@@ -24,8 +18,6 @@ public final class RelayMacLink: MacLink {
     private var mailboxes: [Data: Mailbox] = [:]
     private var macs: [Data: MacRecord] = [:]
     private var keys: [String: ChannelKeys] = [:]
-    /// The relay identity Add Mac browses the lobby with; the offer the owner
-    /// picks is claimed with it, so it becomes that Mac's `phoneRelay` key.
     private var candidate: (keys: ChannelKeys, client: RelayClient)?
 
     public init(endpoint: RelayEndpoint) {
@@ -84,7 +76,6 @@ public final class RelayMacLink: MacLink {
 
     public func register(_ offer: RegistrationOffer) async throws -> RegistrationChannel {
         guard let browsing = candidate, let raw = Hex.data(offer.id), raw.count == 48 else { throw RegistrationError.macCancelled }
-        // A claimed offer binds this relay key; the next attempt browses with a new one.
         candidate = nil
         let lobby = LobbyOffer(offerID: raw.prefix(16), ePubM: raw.suffix(32), label: offer.label, ageSeconds: 0)
         return try await RelayRegistration.begin(client: browsing.client, keys: browsing.keys, offer: lobby)
@@ -97,7 +88,6 @@ public final class RelayMacLink: MacLink {
         return loaded
     }
 
-    /// One long-poll at a time per mailbox, with backoff while the relay is unreachable.
     private func poll(_ bogoID: Data, client: RelayClient, route: MacRoute) async {
         var allowed = false
         var backoff: Duration = .milliseconds(500)
@@ -129,8 +119,6 @@ public final class RelayMacLink: MacLink {
         return true
     }
 
-    /// True when the message may be acknowledged: applied durably, already
-    /// applied before, or dropped because it can't be authenticated.
     private func handle(_ message: RelayMessage, bogoID: Data) -> Bool {
         guard let mac = macs[bogoID], let route = mac.route, let approverID = mac.approverID, message.from == route.macMailbox,
               let msgID = Channel.peekID(message.body), Hex.string(msgID) == message.msgID else { return true }
@@ -144,9 +132,6 @@ public final class RelayMacLink: MacLink {
 }
 
 #if DEBUG
-/// Debug builds keep the in-process stand-in Mac beside the real relay link,
-/// so the section still works without a Mac. A Mac with a relay route goes to
-/// the relay; the stand-in Mac has none.
 @MainActor
 public final class DebugMacLinks: MacLink {
     public let relay: RelayMacLink

@@ -13,7 +13,6 @@ public struct OutboxRow: Equatable, Sendable {
     public let message: PhoneMessage
     public let createdMs: UInt64
     public let sentMs: UInt64?
-    /// The exact bytes sent the first time; every resend reuses them.
     public let envelope: Data?
 }
 
@@ -92,12 +91,10 @@ public final class Store {
             mac.route.map { .text($0.channelAccount) } ?? .null, mac.pushToken.map(Value.data) ?? .null])
     }
 
-    /// True if this message from this Mac was already applied.
     public func applied(bogoID: Data, msgID: Data) -> Bool {
         ((try? query("SELECT 1 FROM inbound WHERE bogo_id = ? AND msg_id = ?", [.data(bogoID), .data(msgID)]) { _ in true }) ?? []).isEmpty == false
     }
 
-    /// Records a message's ID together with its effect, in the same transaction.
     public func markApplied(bogoID: Data, msgID: Data, nowMs: UInt64) throws {
         try run("INSERT OR IGNORE INTO inbound VALUES (?, ?, ?)", [.data(bogoID), .data(msgID), .int(nowMs)])
     }

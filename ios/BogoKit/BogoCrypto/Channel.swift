@@ -1,12 +1,6 @@
 import CryptoKit
 import Foundation
 
-/// BOGO's end-to-end envelope (RELAY-PROTOCOL "Envelope"): single-shot RFC 9180
-/// HPKE in auth mode, DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / ChaCha20-Poly1305.
-///
-///     "BOGOE2E\0" | version=1 | direction | type | msgId:16 | u32 32 | enc:32 | u32 n | ciphertext
-///
-/// The first 27 bytes are the AAD; `info = "bogo/e2e/v1" ‖ bogoId ‖ approverId`.
 public enum Channel {
     public enum Direction: UInt8, Sendable {
         case macToPhone = 0
@@ -45,7 +39,6 @@ public enum Channel {
         return header + u32(32) + enc + u32(UInt32(ciphertext.count)) + ciphertext
     }
 
-    /// The message ID, read before decryption so a duplicate can be dropped unopened.
     public static func peekID(_ envelope: Data) -> Data? {
         let bytes = [UInt8](envelope)
         guard bytes.count >= headerLength, Data(bytes[0..<8]) == magic, bytes[8] == 1 else { return nil }
@@ -79,10 +72,6 @@ public enum Channel {
     }
 }
 
-/// One registered Mac's channel keys on this phone: X25519 `phoneE2E` and
-/// Ed25519 `phoneRelay`. They open and seal envelopes and sign into the relay
-/// mailbox; they can never produce an approval. Kept in BOGO's own Keychain
-/// items, `AfterFirstUnlockThisDeviceOnly`, so a push wake can use them.
 public struct ChannelKeys: Sendable {
     public let e2e: Curve25519.KeyAgreement.PrivateKey
     public let relay: Curve25519.Signing.PrivateKey

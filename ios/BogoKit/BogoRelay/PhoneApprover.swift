@@ -60,9 +60,6 @@ public final class PhoneApprover {
         return pauses[record.bogoID + agent] == record.pauseEpoch
     }
 
-    /// Applies one message from a Mac and records its ID in the same
-    /// transaction. Returns true once that is durable (or the message is one to
-    /// drop), so the link may acknowledge it; false leaves it in the mailbox.
     @discardableResult
     public func receive(_ bogoID: Data, msgID: Data?, _ message: MacMessage) -> Bool {
         guard let store else { return false }
@@ -72,8 +69,6 @@ public final class PhoneApprover {
         var relink = false
         do {
             if mac.state == .waiting {
-                // Until the Mac confirms the registration, only `registered` counts;
-                // everything else waits in the mailbox.
                 guard case .registered(let txID, let approverID) = message else { return false }
                 try store.transaction {
                     if mac.route?.txID == txID, mac.approverID == approverID {
@@ -307,8 +302,6 @@ public final class PhoneApprover {
                             route: saved?.route, pushToken: pushToken)
         try store.save(mac)
         reload()
-        // The Mac's mailbox is allowed and watched before the submission goes
-        // out, so a `registered` that misses the lobby still arrives.
         link.start(macs: macs)
         do {
             let registered = try await channel.submit(RegistrationSubmission(approvalPublicKey: key.publicKey, proof: key.proof, attestation: attestation,
@@ -320,7 +313,6 @@ public final class PhoneApprover {
                 try store.save(current)
             }
         } catch RegistrationError.unanswered where saved != nil {
-            // The Mac may have committed: keep the entry waiting and ask again.
             try? store.enqueue(.regResend(txID: saved!.route.txID), to: mac.bogoID, nowMs: clock())
             reload()
             Task { await flush() }

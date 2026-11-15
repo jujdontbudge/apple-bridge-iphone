@@ -2,8 +2,6 @@ import BogoModel
 import CryptoKit
 import Foundation
 
-/// Where BOGO's relay is and the service identity its mailbox auth binds
-/// (normally `host:port`).
 public struct RelayEndpoint: Sendable, Equatable {
     public let url: URL
     public let service: String
@@ -33,9 +31,6 @@ public struct LobbyOffer: Sendable {
     public let ageSeconds: UInt64
 }
 
-/// One authenticated relay mailbox (RELAY-PROTOCOL "Mailbox transport"). TLS
-/// and hostname checks stay on, redirects are refused, and the bearer token
-/// lives only in memory; a 401 re-authenticates once.
 @MainActor
 public final class RelayClient {
     public let endpoint: RelayEndpoint
