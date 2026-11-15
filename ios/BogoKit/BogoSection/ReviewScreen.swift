@@ -89,7 +89,8 @@ struct ReviewScreen: View {
         } message: {
             Text("Its waiting requests end now, and BOGO refuses new ones until you un-pause it on the Mac.")
         }
-        .safeAreaInset(edge: .bottom) {
+        .scrollEdgeEffectStyle(.hard, for: .bottom)
+        .safeAreaBar(edge: .bottom) {
             if open && !paused {
                 actions(record, date: date)
             }
@@ -146,10 +147,10 @@ struct ReviewScreen: View {
     }
 
     private func statusSymbol(_ record: RequestRecord) -> String {
-        switch record.phase.decision {
-        case .approved?: return "checkmark.circle"
-        case .denied?: return "xmark.circle"
-        case nil: return "clock.badge.xmark"
+        switch Formatting.history(record).mark {
+        case .approved: return "checkmark.circle"
+        case .denied: return "xmark.circle"
+        case .ended, .paused: return "clock.badge.xmark"
         }
     }
 }
