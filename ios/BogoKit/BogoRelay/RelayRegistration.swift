@@ -145,7 +145,6 @@ final class RelayRegistration: RegistrationChannel {
         return RegWire.sha(transcriptHash, challenge, approvalKey, keys.e2e.publicKey.rawRepresentation, keys.relay.publicKey.rawRepresentation)
     }
 
-
     func saveRoute() throws -> (route: MacRoute, approverID: Data)? {
         guard let confirmed else { throw RegistrationError.macCancelled }
         let account = Hex.string(confirmed.bogoID) + "." + Hex.string(txID.prefix(8))
