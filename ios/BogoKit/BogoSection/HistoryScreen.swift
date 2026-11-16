@@ -45,7 +45,7 @@ struct HistoryRow: View {
                     Text((Formatting.headline(review) == nil ? Formatting.visible(request.agentName) : Formatting.row(review).detail) + AttributedString(" · " + status))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(3)
                 } else {
                     Text("Unreadable request").font(.headline)
                     Text(status)
