@@ -55,8 +55,9 @@ struct ReviewScreen: View {
                 }
             }
             if let request = record.request {
-                WillExecute(review: Review(request), date: date)
-                AgentReason(review: Review(request))
+                let review = Review(request)
+                Summary(review: review, date: date)
+                AgentReason(review: review)
                 if let entry, entry.count > 1, open {
                     Section {
                         Text("\(entry.count) identical requests are waiting. Approve or Deny decides this one, the oldest.")
@@ -64,6 +65,7 @@ struct ReviewScreen: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                WillExecute(review: review)
             } else {
                 Unreadable(record: record, macName: approver.mac(record.bogoID)?.name)
             }
@@ -155,19 +157,61 @@ struct ReviewScreen: View {
     }
 }
 
-struct WillExecute: View {
+struct Summary: View {
     let review: Review
     let date: Date
 
     var body: some View {
         let request = review.request
+        let shown = review.highlights.filter { !(review.action != nil && $0.path == [.key("name")]) }
+        let prominent = shown.filter(\.prominent)
+        let fields = shown.filter(\.field)
+        let missing = shown.filter { $0.value == .missing }
+        let names = Formatting.fieldNames(fields + missing)
         Section {
-            ForEach(review.highlights) { highlight in
+            VStack(alignment: .leading, spacing: 3) {
+                Text(Formatting.asks(request.agentName))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(Formatting.visible(review.action ?? request.tool))
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(3)
+                Text(Formatting.via(review))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 6)
+            ForEach(prominent) { highlight in
                 HighlightRow(highlight: highlight)
             }
-            LabeledContent("Upstream") { Text(Formatting.visible(request.upstream)) }
-            LabeledContent("Tool") { Text(Formatting.visible(request.tool)).font(.body.monospaced()) }
-            LabeledContent("Requested by") { Text(Formatting.visible(request.agentName)) }
+            if review.pictures.count == 1, let link = review.pictures.first {
+                AgentPicture(link: link).padding(.vertical, 4)
+            } else if review.pictures.count > 1 {
+                VStack(alignment: .leading, spacing: 8) {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 10) {
+                            ForEach(review.pictures, id: \.self) { link in AgentPicture(link: link, side: 120) }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                    Text("Agent’s pictures (unverified)").font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            }
+            ForEach(fields) { highlight in
+                if case .text(let value) = highlight.value {
+                    LabeledContent {
+                        Text(Formatting.summary(value)).multilineTextAlignment(.trailing)
+                    } label: {
+                        Text(Formatting.visible(names[highlight.id] ?? highlight.label))
+                    }
+                }
+            }
+            if !missing.isEmpty {
+                Text(Formatting.visible("Not in this request: " + missing.map { names[$0.id] ?? $0.label }.joined(separator: ", ")))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             if let expires = request.expires {
                 LabeledContent("Expires in") {
                     Text(date < expires ? Formatting.remaining(expires, now: date) : "Expired")
@@ -175,23 +219,74 @@ struct WillExecute: View {
                         .foregroundStyle(date < expires ? Color.primary : Color.red)
                 }
             }
-        } header: {
-            Text("Will execute (exact)")
         }
+    }
+}
+
+struct WillExecute: View {
+    let review: Review
+    @State private var unfolded: Set<Int> = []
+
+    var body: some View {
+        let request = review.request
         Section {
+            LabeledContent("Upstream") { Text(Formatting.visible(request.upstream)) }
+            LabeledContent("Tool") { Text(Formatting.visible(request.tool)).font(.body.monospaced()) }
+            LabeledContent("Requested by") { Text(Formatting.visible(request.agentName)) }
             if let rows = review.arguments {
                 if rows.isEmpty {
                     Text("Empty arguments { }").foregroundStyle(.secondary)
                 }
-                ForEach(rows) { row in
-                    ArgumentRowView(row: row)
+                ForEach(rows.filter { $0.foldedInto.map(unfolded.contains) ?? true }) { row in
+                    if let fold = row.fold {
+                        FoldRow(fold: fold, depth: row.depth, open: unfolded.contains(row.id)) {
+                            withAnimation(.snappy) {
+                                if unfolded.contains(row.id) { unfolded.remove(row.id) } else { unfolded.insert(row.id) }
+                            }
+                        }
+                    } else {
+                        ArgumentRowView(row: row)
+                    }
                 }
             } else {
                 Text("No arguments sent").foregroundStyle(.secondary)
             }
         } header: {
-            Text("Arguments")
+            Text("Will execute (exact)")
         }
+    }
+}
+
+struct FoldRow: View {
+    let fold: Review.EmptyFold
+    let depth: Int
+    let open: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(fold.labels.count) empty \(fold.items ? "items" : "fields")")
+                        .foregroundStyle(.secondary)
+                    if !open {
+                        Text(Formatting.list(fold.labels))
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, CGFloat(depth) * 16)
+        .accessibilityHint(open ? "Hides them" : "Shows them")
     }
 }
 
@@ -220,15 +315,23 @@ struct HighlightRow: View {
                     .foregroundStyle(.orange)
             }
             .padding(.vertical, 4)
-        case .text:
+        case .text, .missing:
             EmptyView()
-        case .missing:
-            LabeledContent {
-                Text("Not in this request").foregroundStyle(.secondary)
-            } label: {
-                Text(Formatting.visible(highlight.label))
-            }
         }
+    }
+}
+
+extension Review.Highlight {
+    var prominent: Bool {
+        switch value {
+        case .money, .unformattable: return true
+        case .text, .missing: return false
+        }
+    }
+
+    var field: Bool {
+        if case .text = value { return true }
+        return false
     }
 }
 
@@ -241,7 +344,7 @@ struct ArgumentRowView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     label
                     if let picture = row.picture {
-                        AgentPicture(link: picture).padding(.vertical, 4)
+                        AgentPicture(link: picture, side: 64).padding(.vertical, 2)
                     }
                     if let leaf = row.leaf {
                         Text(Formatting.value(leaf))
@@ -283,9 +386,10 @@ struct ArgumentRowView: View {
 
     private var stacked: Bool {
         if row.picture != nil { return true }
+        let room = 34 - (row.label?.count ?? 0) - row.depth * 2
         switch row.leaf {
-        case .string(let text)?: return multiline || text.count > 26
-        case .number(let text)?: return text.count > 20
+        case .string(let text)?: return multiline || text.count > min(26, room)
+        case .number(let text)?: return text.count > min(20, room)
         default: return false
         }
     }

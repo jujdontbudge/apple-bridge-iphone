@@ -117,6 +117,7 @@ final class PictureGuard: NSObject, URLSessionTaskDelegate, Sendable {
 
 struct AgentPicture: View {
     let link: String
+    var side: CGFloat?
     @State private var pictures = Pictures.shared
 
     var body: some View {
@@ -127,6 +128,17 @@ struct AgentPicture: View {
     private var content: some View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         switch pictures.loads[link] ?? .loading {
+        case .shown(let image) where side != nil:
+            let side = side ?? 0
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .padding(image.hasAlpha ? side / 10 : 0)
+                .frame(width: side, height: side)
+                .background(Color(.tertiarySystemFill))
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(Color(.separator).opacity(0.5), lineWidth: 0.5))
+                .accessibilityLabel("Agent’s picture")
         case .shown(let image):
             VStack(alignment: .leading, spacing: 8) {
                 Image(uiImage: image)
@@ -143,6 +155,11 @@ struct AgentPicture: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        case .loading where side != nil:
+            tile(shape) { ProgressView().controlSize(.small) }
+        case .unavailable(let why) where side != nil:
+            tile(shape) { Image(systemName: "photo").foregroundStyle(.tertiary) }
+                .accessibilityLabel("Can’t preview · \(why)")
         case .loading:
             note(shape) {
                 ProgressView().controlSize(.small)
@@ -154,6 +171,12 @@ struct AgentPicture: View {
                 Text("Can’t preview · \(why)").foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func tile(_ shape: RoundedRectangle, @ViewBuilder _ content: () -> some View) -> some View {
+        content()
+            .frame(width: side, height: side)
+            .background(Color(.tertiarySystemFill), in: shape)
     }
 
     private func note(_ shape: RoundedRectangle, @ViewBuilder _ content: () -> some View) -> some View {

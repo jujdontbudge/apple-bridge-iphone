@@ -38,7 +38,7 @@ struct HistoryRow: View {
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 3) {
                 if let request = record.request {
-                    Text(Formatting.headline(Review(request)) ?? request.tool)
+                    Text(Formatting.row(Review(request)).headline)
                         .font(.headline)
                         .lineLimit(1)
                     Text(request.agentName + " · " + status)

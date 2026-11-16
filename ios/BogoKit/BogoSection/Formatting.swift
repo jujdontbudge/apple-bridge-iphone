@@ -47,6 +47,81 @@ enum Formatting {
         }
     }
 
+    static func asks(_ agent: String) -> AttributedString {
+        var name = visible(agent)
+        name.foregroundColor = .primary
+        name.font = .subheadline.weight(.semibold)
+        return name + AttributedString(" wants to run")
+    }
+
+    static func via(_ review: Review) -> AttributedString {
+        let request = review.request
+        guard review.action != nil else { return AttributedString("on ") + visible(request.upstream) }
+        return visible(request.tool) + AttributedString(" on ") + visible(request.upstream)
+    }
+
+    static func title(_ review: Review) -> String {
+        review.action ?? review.request.tool
+    }
+
+    static func summary(_ value: ArgumentValue) -> AttributedString {
+        switch value {
+        case .string(let text) where !text.isEmpty: return visible(text)
+        case .bool(let flag): return AttributedString(flag ? "true" : "false")
+        case .number(let text): return AttributedString(text)
+        default: return self.value(value)
+        }
+    }
+
+    static func list(_ labels: [String]) -> AttributedString {
+        var result = AttributedString()
+        for (index, label) in labels.enumerated() {
+            if index > 0 { result += AttributedString(", ") }
+            result += visible(label)
+        }
+        return result
+    }
+
+    static func fieldNames(_ highlights: [Review.Highlight]) -> [Int: String] {
+        let names = highlights.map { highlight -> (Int, String) in
+            guard case .key(let key)? = highlight.path.last else { return (highlight.id, highlight.label) }
+            return (highlight.id, words(key))
+        }
+        let counts = Dictionary(grouping: names, by: { $0.1.lowercased() }).mapValues(\.count)
+        return Dictionary(uniqueKeysWithValues: names.map { id, name in
+            (id, counts[name.lowercased()] == 1 ? name : highlights.first { $0.id == id }?.label ?? name)
+        })
+    }
+
+    static func words(_ key: String) -> String {
+        var words: [String] = []
+        var current = ""
+        var previous: Character?
+        for character in key {
+            if character == "_" || character == "-" || character == " " || character == "." {
+                if !current.isEmpty { words.append(current) }
+                current = ""
+            } else if character.isUppercase, let previous, previous.isLowercase || previous.isNumber {
+                words.append(current)
+                current = String(character)
+            } else {
+                current.append(character)
+            }
+            previous = character
+        }
+        if !current.isEmpty { words.append(current) }
+        guard !words.isEmpty else { return key }
+        let joined = words.map { $0.count > 1 && $0 == $0.uppercased() ? $0 : $0.lowercased() }.joined(separator: " ")
+        return joined.prefix(1).uppercased() + joined.dropFirst()
+    }
+
+    static func row(_ review: Review) -> (headline: AttributedString, detail: AttributedString) {
+        let request = review.request
+        let agent = visible(request.agentName) + AttributedString(" · ")
+        if let money = headline(review) { return (AttributedString(money), agent + visible(title(review))) }
+        return (visible(title(review)), agent + visible(review.action == nil ? request.upstream : request.tool))
+    }
+
     static func headline(_ review: Review) -> String? {
         for highlight in review.highlights {
             if case .money(let amount, _) = highlight.value { return amount.formatted }

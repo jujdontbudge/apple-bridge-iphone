@@ -121,7 +121,7 @@ struct InboxRow: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline) {
                 if let request = record.request {
-                    Text(Formatting.headline(Review(request)) ?? request.tool)
+                    Text(Formatting.row(Review(request)).headline)
                         .font(.headline)
                         .lineLimit(1)
                 } else {
@@ -159,8 +159,7 @@ struct InboxRow: View {
         .opacity(entry.live ? 1 : 0.45)
     }
 
-    private func detail(_ request: ApprovalRequest) -> String {
-        let what = Formatting.headline(Review(request)) == nil ? request.upstream : request.tool
-        return request.agentName + " · " + what
+    private func detail(_ request: ApprovalRequest) -> AttributedString {
+        Formatting.row(Review(request)).detail
     }
 }
