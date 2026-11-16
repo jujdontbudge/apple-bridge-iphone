@@ -101,7 +101,7 @@ public struct Review: Sendable {
 
     private static func pictureLinks(in text: String) -> [String] {
         var links: [String] = []
-        for match in text.matches(of: #/(?i)https?:\/\/[^\s<>"'\u{201C}\u{201D}\u{2018}\u{2019}]+/#) {
+        for match in text.matches(of: #/(?i)https?:\/\/[^\s<>"'`\u{201C}\u{201D}\u{2018}\u{2019}]+/#) {
             var link = String(match.output)
             while let last = link.last, ".,;:!?)]}".contains(last) { link.removeLast() }
             guard let path = URL(string: link, encodingInvalidCharacters: false)?.path().lowercased(),
