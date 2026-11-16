@@ -19,13 +19,15 @@ final class Pictures {
     private(set) var loads: [String: PictureLoad] = [:]
     private var order: [String] = []
 
-    func load(_ link: String) async {
+    func load(_ link: String) {
         guard loads[link] == nil else { return }
         loads[link] = .loading
         order.append(link)
         while order.count > Self.kept { loads[order.removeFirst()] = nil }
-        let result = await PictureFetch.picture(link)
-        if loads[link] != nil { loads[link] = result }
+        Task {
+            let result = await PictureFetch.picture(link)
+            if loads[link] != nil { loads[link] = result }
+        }
     }
 }
 
@@ -118,7 +120,7 @@ struct AgentPicture: View {
     @State private var pictures = Pictures.shared
 
     var body: some View {
-        content.task(id: link) { await pictures.load(link) }
+        content.onAppear { pictures.load(link) }
     }
 
     @ViewBuilder
