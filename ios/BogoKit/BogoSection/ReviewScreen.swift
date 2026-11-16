@@ -240,6 +240,9 @@ struct ArgumentRowView: View {
             if stacked {
                 VStack(alignment: .leading, spacing: 6) {
                     label
+                    if let picture = row.picture {
+                        AgentPicture(link: picture).padding(.vertical, 4)
+                    }
                     if let leaf = row.leaf {
                         Text(Formatting.value(leaf))
                             .font(multiline ? .callout.monospaced() : .body)
@@ -279,6 +282,7 @@ struct ArgumentRowView: View {
     }
 
     private var stacked: Bool {
+        if row.picture != nil { return true }
         switch row.leaf {
         case .string(let text)?: return multiline || text.count > 26
         case .number(let text)?: return text.count > 20
@@ -310,6 +314,16 @@ struct AgentReason: View {
                 }
             } else {
                 Text("No reason given").foregroundStyle(.secondary)
+            }
+            ForEach(review.reasonPictures, id: \.self) { link in
+                VStack(alignment: .leading, spacing: 6) {
+                    AgentPicture(link: link)
+                    Text(Formatting.visible(link, quoted: true))
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                .padding(.vertical, 4)
             }
             ForEach(review.warnings, id: \.self) { warning in
                 Label(warning, systemImage: "exclamationmark.triangle.fill")
